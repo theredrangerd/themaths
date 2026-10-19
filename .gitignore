@@ -6,3 +6,6 @@ data/
 *.db
 .DS_Store
 .env
+.playwright-mcp/
+.pytest_cache/
+.impeccable/

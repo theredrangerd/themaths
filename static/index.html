@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>themaths</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="wordmark" href="#/practice">themaths</a>
+      <nav class="nav" aria-label="Main">
+        <a href="#/practice" data-view="practice">Practice</a>
+        <a href="#/progress" data-view="progress">Progress</a>
+        <a href="#/history" data-view="history">History</a>
+        <a href="#/settings" data-view="settings">Settings</a>
+      </nav>
+      <div class="model-status" id="model-status" role="status"></div>
+    </div>
+  </header>
+
+  <main id="app">
+    <!-- Practice -------------------------------------------------------->
+    <section class="view" id="view-practice" hidden>
+      <form class="ask" id="ask-form" autocomplete="off">
+        <label class="ask-label" for="ask-input">Ask for a problem</label>
+        <div class="ask-row">
+          <input id="ask-input" class="ask-input" type="text" placeholder="e.g. a hard AMC 12 counting problem">
+          <button class="btn btn-primary" type="submit" id="ask-submit">Get problem</button>
+        </div>
+        <div class="ask-options">
+          <label>Track
+            <select id="opt-track"><option value="">Any</option></select>
+          </label>
+          <label>Topic
+            <select id="opt-topic"><option value="">Any</option></select>
+          </label>
+          <label>Difficulty
+            <select id="opt-difficulty"><option value="">Any</option></select>
+          </label>
+          <button class="btn btn-quiet" type="button" id="screenshot-btn">Use a screenshot</button>
+          <input type="file" id="screenshot-file" accept="image/*" hidden>
+        </div>
+      </form>
+
+      <div class="practice-grid">
+        <div class="practice-main">
+          <div class="busy" id="busy" hidden>
+            <span class="busy-dot" aria-hidden="true"></span>
+            <span id="busy-text">Working</span>
+            <span class="busy-time" id="busy-time"></span>
+            <button class="btn-link" type="button" id="busy-cancel">Cancel</button>
+          </div>
+
+          <div id="screenshot-panel" class="screenshot-panel" hidden>
+            <h2 class="panel-title">Check the transcription</h2>
+            <p class="panel-help">Correct anything the model misread, then start the problem.</p>
+            <textarea id="screenshot-text" class="code-input" rows="7" spellcheck="false"></textarea>
+            <div class="preview math-prose" id="screenshot-preview"></div>
+            <div class="row-actions">
+              <button class="btn btn-primary" type="button" id="screenshot-use">Start this problem</button>
+              <button class="btn btn-quiet" type="button" id="screenshot-discard">Discard</button>
+            </div>
+          </div>
+
+          <article class="problem" id="problem" aria-live="polite">
+            <div class="problem-empty" id="problem-empty">
+              <p class="empty-lead">Ask for a problem above, or start with one of these.</p>
+              <ul class="suggestions" id="suggestions"></ul>
+              <p class="empty-foot">You can also paste a screenshot of a printed problem anywhere on this page.</p>
+            </div>
+            <div id="problem-body" hidden>
+              <header class="problem-head">
+                <div class="problem-tags" id="problem-tags"></div>
+                <span class="badge" id="problem-badge"></span>
+              </header>
+              <div class="problem-statement math-prose" id="problem-statement"></div>
+              <div class="problem-choices" id="problem-choices"></div>
+            </div>
+          </article>
+
+          <section class="work" id="work" hidden>
+            <div class="field">
+              <div class="field-head">
+                <label for="working">Your working</label>
+                <span class="field-help">LaTeX or plain text. The tutor reads this when giving hints.</span>
+              </div>
+              <textarea id="working" class="code-input" rows="6" spellcheck="false" placeholder="Write where you've got to, e.g. Let $n = 2k+1$, then $n^2 = 4k^2+4k+1$ …"></textarea>
+              <div class="preview math-prose" id="working-preview" hidden></div>
+            </div>
+            <div class="field answer-field">
+              <label for="answer">Final answer</label>
+              <div class="answer-row">
+                <input id="answer" class="code-input answer-input" type="text" spellcheck="false" placeholder="e.g. 3/4, 2\sqrt{3}, C">
+                <span class="answer-preview" id="answer-preview" aria-hidden="true"></span>
+              </div>
+            </div>
+            <div class="actions" id="actions">
+              <button class="btn btn-primary" type="button" id="act-check">Check answer</button>
+              <button class="btn btn-hint" type="button" id="act-hint">Hint 1</button>
+              <button class="btn btn-secondary" type="button" id="act-explain">Why?</button>
+              <button class="btn btn-secondary" type="button" id="act-another">Another like this</button>
+              <span class="actions-spacer"></span>
+              <button class="btn-link" type="button" id="act-solution">Show solution</button>
+              <button class="btn-link btn-link-danger" type="button" id="act-flag">This problem seems wrong</button>
+            </div>
+            <form class="inline-form" id="explain-form" hidden>
+              <label for="explain-q">What would you like explained? <span class="optional">Optional</span></label>
+              <div class="ask-row">
+                <input id="explain-q" type="text" class="ask-input" placeholder="e.g. why does completing the square find the vertex?">
+                <button class="btn btn-secondary" type="submit">Explain</button>
+              </div>
+            </form>
+            <form class="inline-form" id="flag-form" hidden>
+              <label for="flag-reason">What seems wrong with it?</label>
+              <div class="ask-row">
+                <input id="flag-reason" type="text" class="ask-input" placeholder="e.g. two of the answer choices are equal">
+                <button class="btn btn-danger" type="submit">Flag problem</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="thread" id="thread" aria-live="polite"></section>
+        </div>
+
+        <aside class="practice-side" id="side" hidden>
+          <section class="side-block">
+            <h2 class="side-title">Hints used</h2>
+            <ol class="ladder" id="ladder">
+              <li data-level="1"><span class="rung-name">Nudge</span><span class="rung-desc">where to look</span></li>
+              <li data-level="2"><span class="rung-name">Tool</span><span class="rung-desc">the idea that unlocks it</span></li>
+              <li data-level="3"><span class="rung-name">Next step</span><span class="rung-desc">what to do next</span></li>
+              <li data-level="4"><span class="rung-name">Solution</span><span class="rung-desc">the full working</span></li>
+            </ol>
+          </section>
+          <section class="side-block">
+            <h2 class="side-title">Answer check</h2>
+            <p class="side-text" id="verify-text"></p>
+          </section>
+          <section class="side-block">
+            <h2 class="side-title">This session</h2>
+            <dl class="session-stats" id="session-stats"></dl>
+          </section>
+        </aside>
+      </div>
+    </section>
+
+    <!-- Progress -------------------------------------------------------->
+    <section class="view" id="view-progress" hidden>
+      <h1 class="page-title">Progress</h1>
+      <div id="progress-body"></div>
+    </section>
+
+    <!-- History --------------------------------------------------------->
+    <section class="view" id="view-history" hidden>
+      <h1 class="page-title">History</h1>
+      <div id="history-body"></div>
+    </section>
+
+    <!-- Settings -------------------------------------------------------->
+    <section class="view" id="view-settings" hidden>
+      <h1 class="page-title">Settings</h1>
+      <form class="settings" id="settings-form">
+        <div class="setting">
+          <label for="set-reasoning">Tutor model</label>
+          <select id="set-reasoning"></select>
+          <p class="setting-help">Writes problems, hints and explanations. Larger models are slower but make fewer mistakes.</p>
+        </div>
+        <div class="setting">
+          <label for="set-vision">Screenshot model</label>
+          <select id="set-vision"></select>
+          <p class="setting-help">Reads screenshots. It must support images.</p>
+        </div>
+        <div class="setting setting-inline">
+          <input type="checkbox" id="set-think">
+          <label for="set-think">Let the model think before answering</label>
+          <p class="setting-help">Slower, but much more reliable for mathematics.</p>
+        </div>
+        <div class="setting">
+          <label for="set-retries">Retries when an answer fails verification</label>
+          <input type="number" id="set-retries" min="0" max="5" step="1">
+        </div>
+        <div class="row-actions">
+          <button class="btn btn-primary" type="submit">Save settings</button>
+          <span class="saved-note" id="settings-saved" role="status"></span>
+        </div>
+      </form>
+      <section class="data-block">
+        <h2 class="section-title">Your data</h2>
+        <p>Everything is stored on this Mac in <code>data/themaths.db</code>.</p>
+        <p><a class="btn btn-secondary" href="/api/export.json">Export as JSON</a> <a class="btn btn-secondary" href="/api/export.csv">Export as CSV</a></p>
+      </section>
+    </section>
+  </main>
+
+  <script src="/static/vendor/katex/katex.min.js"></script>
+  <script src="/static/vendor/marked/marked.min.js"></script>
+  <script src="/static/vendor/dompurify/purify.min.js"></script>
+  <script src="/static/render.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

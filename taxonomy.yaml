@@ -1,0 +1,70 @@
+# Topics and difficulty scales. Edit freely; the app reads this at startup.
+
+IB:
+  name: IB AA HL
+  topics:
+    Number and algebra:
+      - Sequences and series
+      - Exponents and logarithms
+      - Proof
+      - Complex numbers
+      - Binomial theorem
+      - Counting
+      - Systems of equations
+    Functions:
+      - Properties of functions
+      - Transformations
+      - Polynomials
+      - Rational functions
+      - Inequalities
+    Geometry and trigonometry:
+      - Trigonometric identities
+      - Trigonometric equations
+      - Vectors
+      - Lines and planes
+    Statistics and probability:
+      - Probability
+      - Discrete distributions
+      - Bayes' theorem
+      - Continuous random variables
+    Calculus:
+      - Limits
+      - Differentiation
+      - Integration
+      - Differential equations
+      - Maclaurin series
+  difficulty:
+    - straightforward
+    - standard
+    - exam-hard
+    - beyond-syllabus
+
+AMC:
+  name: AMC 12
+  topics:
+    Algebra:
+      - Polynomials
+      - Functional equations
+      - Inequalities
+      - Sequences
+      - Logarithms and exponents
+    Counting and probability:
+      - Counting
+      - Probability
+      - Expected value
+    Number theory:
+      - Divisibility
+      - Modular arithmetic
+      - Primes and factorisation
+      - Digits and bases
+    Geometry:
+      - Plane geometry
+      - Coordinate geometry
+      - Solid geometry
+    Trigonometry and complex numbers:
+      - Trigonometry
+      - Complex numbers
+  difficulty:
+    - "1-10"
+    - "11-20"
+    - "21-25"
