@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import db, ollama, progress, taxonomy, tutor
+from . import books, db, ollama, progress, taxonomy, tutor
 from .config import STATIC_DIR
 
 logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(name)s %(message)s")
@@ -57,6 +57,10 @@ class ImportIn(BaseModel):
 
 class ImageIn(BaseModel):
     image: str  # base64, no data: prefix
+
+
+class SelfIn(BaseModel):
+    got_it: bool
 
 
 class WorkingIn(BaseModel):
@@ -165,6 +169,100 @@ def explain(attempt_id: int, body: WorkingIn):
 @app.post("/api/attempts/{attempt_id}/flag")
 def flag(attempt_id: int, body: WorkingIn):
     return sse(tutor.flag(attempt_id, body.reason))
+
+
+@app.post("/api/attempts/{attempt_id}/retry")
+def retry(attempt_id: int):
+    _state_or_404(attempt_id)
+    return tutor.retry(attempt_id)
+
+
+@app.post("/api/attempts/{attempt_id}/self")
+def self_mark(attempt_id: int, body: SelfIn):
+    _state_or_404(attempt_id)
+    try:
+        return tutor.self_mark(attempt_id, body.got_it)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+
+
+# Books ------------------------------------------------------------------
+
+NOT_FOUND = "Not found."
+
+
+def _book_error(exc: books.BookError):
+    return HTTPException(500, str(exc))
+
+
+@app.get("/api/books")
+def list_books():
+    try:
+        return books.list_books()
+    except LookupError:
+        raise HTTPException(404, NOT_FOUND)
+    except books.BookError as exc:
+        raise _book_error(exc)
+
+
+@app.get("/api/books/{book}/{chapter}")
+def get_chapter(book: str, chapter: str):
+    try:
+        ch = books.load_chapter(book, chapter)
+    except LookupError:
+        raise HTTPException(404, NOT_FOUND)
+    except books.BookError as exc:
+        raise _book_error(exc)
+    prefix = f"{book}/{chapter}/"
+    found = db.book_statuses(prefix)
+    statuses = {}
+    for _, p in books._problems(ch):
+        status = found.get(prefix + p["ref"])
+        if status:
+            statuses[p["ref"]] = status
+    values = list(statuses.values())
+    return {
+        "chapter": books.public_chapter(ch),
+        "statuses": statuses,
+        "summary": {
+            "total": sum(1 for _ in books._problems(ch)),
+            "solved": sum(v in ("unaided", "solved") for v in values),
+            "unaided": values.count("unaided"),
+            "seen": values.count("seen"),
+        },
+    }
+
+
+@app.post("/api/books/{book}/{chapter}/problems/{ref}/open")
+def open_book_problem(book: str, chapter: str, ref: str):
+    try:
+        return tutor.open_book_problem(book, chapter, ref)
+    except LookupError:
+        raise HTTPException(404, NOT_FOUND)
+    except books.BookError as exc:
+        raise _book_error(exc)
+
+
+def _unlocked(book: str, chapter: str, attempt_id: int | None) -> bool:
+    """A solution image is served only for an attempt on this chapter that has seen the solution or solved it."""
+    found = db.get_attempt(attempt_id) if attempt_id is not None else None
+    if not found:
+        return False
+    attempt, problem = found
+    if not (problem.get("book_ref") or "").startswith(f"{book}/{chapter}/"):
+        return False
+    return bool(attempt["solution_viewed"]) or attempt["outcome"] == "correct"
+
+
+@app.get("/api/books/{book}/{chapter}/img/{name}")
+def book_image(book: str, chapter: str, name: str, attempt: int | None = None):
+    try:
+        path = books.image_path(book, chapter, name)
+        if name in books.secret_images(books.load_chapter(book, chapter)) and not _unlocked(book, chapter, attempt):
+            raise LookupError(name)
+    except (LookupError, books.BookError):
+        raise HTTPException(404, NOT_FOUND)
+    return FileResponse(path, headers={"Cache-Control": "no-store"})
 
 
 # Progress and history ---------------------------------------------------
