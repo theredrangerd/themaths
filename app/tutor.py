@@ -16,7 +16,7 @@ import random
 import re
 import time
 
-from . import db, leak, ollama, prompts, sandbox, sections, taxonomy, verify
+from . import books, db, leak, ollama, prompts, sandbox, sections, taxonomy, verify
 from .config import DATA_DIR
 
 log = logging.getLogger("themaths.tutor")
@@ -71,7 +71,7 @@ def _public(attempt: dict, problem: dict) -> dict:
             k: problem[k]
             for k in (
                 "id", "statement", "choices", "track", "topic", "subtopic", "difficulty", "answer_type",
-                "verification_status", "verification_note", "source", "flagged",
+                "verification_status", "verification_note", "source", "flagged", "book_ref", "book_hints",
             )
         },
         "attempt": {
@@ -596,6 +596,48 @@ def _finish(attempt: dict, outcome: str) -> dict:
     return fields
 
 
+_IMG = re.compile(r"(/api/books/[a-z0-9-]+/[a-z0-9-]+/img/[\w-]+\.(?:png|jpg|svg))")
+
+
+def _ensure_book_problem(book: str, chapter: str, ref: str) -> int:
+    ch = books.load_chapter(book, chapter)
+    return db.upsert_book_problem(books.problem_row(ch, books.find_problem(ch, ref)))
+
+
+def _latest_or_new(problem_id: int) -> int:
+    return db.latest_attempt(problem_id) or db.start_attempt(problem_id)
+
+
+def open_book_problem(book: str, chapter: str, ref: str) -> dict:
+    """Upsert a book problem from its YAML, resume its latest attempt (or start one), return the state."""
+    return attempt_state(_latest_or_new(_ensure_book_problem(book, chapter, ref)))
+
+
+def retry(attempt_id: int) -> dict:
+    _, problem = _load(attempt_id)
+    return attempt_state(db.start_attempt(problem["id"]))
+
+
+def self_mark(attempt_id: int, got_it: bool) -> dict:
+    attempt, _ = _load(attempt_id)
+    if not attempt["solution_viewed"]:
+        raise ValueError("Reveal the solution before marking yourself.")
+    db.update_attempt(attempt_id, **_finish(attempt, "correct" if got_it else "gave_up"))
+    return attempt_state(attempt_id)
+
+
+def _mark_siblings_seen(book_ref: str) -> None:
+    """A solution shared with other parts shows them too: count those as seen, and give up if open."""
+    for sib in books.siblings(book_ref):
+        book, chapter, ref = sib.split("/", 2)
+        attempt_id = _latest_or_new(_ensure_book_problem(book, chapter, ref))
+        attempt, _ = _load(attempt_id)
+        fields = {"solution_viewed": 1}
+        if attempt["outcome"] in (None, "incorrect"):
+            fields.update(_finish(attempt, "gave_up"))
+        db.update_attempt(attempt_id, **fields)
+
+
 def check_answer(attempt_id: int, answer: str, working: str) -> dict:
     attempt, problem = _load(attempt_id)
     verdict = verify.check(answer, problem)
@@ -664,6 +706,12 @@ async def hint(attempt_id: int, working: str):
             yield event
         return
     db.update_attempt(attempt_id, hint_level=level)
+    if level <= (problem.get("book_hints") or 0):
+        # The book's own hint: served verbatim, with no model call and no leak checks.
+        text = problem["hints"][level - 1]
+        db.add_event(attempt_id, "hint", text, level=level, meta={"book": True})
+        yield {"type": "done", "text": text, "state": attempt_state(attempt_id)}
+        return
     prepared = problem["hints"][level - 1] if len(problem["hints"]) >= level else ""
     if (not working.strip() and prepared and not leak.find(prepared, problem)
             and not leak.ahead(prepared, problem["statement"], "")):
@@ -689,11 +737,19 @@ async def hint(attempt_id: int, working: str):
 async def solution(attempt_id: int):
     attempt, problem = _load(attempt_id)
     fields = {"hint_level": 4, "solution_viewed": 1}
-    if attempt["outcome"] in (None, "incorrect"):
+    text = problem["solution"]
+    if problem["source"] == "book":
+        text = _IMG.sub(rf"\1?attempt={attempt_id}", text)
+        if problem["answer_type"] != "self":
+            # A self-marked problem stays open until the student says how they did.
+            if attempt["outcome"] in (None, "incorrect"):
+                fields.update(_finish(attempt, "gave_up"))
+        _mark_siblings_seen(problem["book_ref"])
+    elif attempt["outcome"] in (None, "incorrect"):
         fields.update(_finish(attempt, "gave_up"))
     db.update_attempt(attempt_id, **fields)
-    db.add_event(attempt_id, "solution", problem["solution"], level=4)
-    yield {"type": "done", "text": problem["solution"], "state": attempt_state(attempt_id)}
+    db.add_event(attempt_id, "solution", text, level=4)
+    yield {"type": "done", "text": text, "state": attempt_state(attempt_id)}
 
 
 async def analyse(attempt_id: int, working: str, answer: str):

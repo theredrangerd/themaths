@@ -238,6 +238,8 @@ def check(user_answer: str, problem: dict) -> Verdict:
     """Mark a user's final answer against the stored answer for a problem."""
     kind = problem["answer_type"]
     truth = problem["answer"]
+    if kind == "self":
+        return Verdict("unverifiable", "This one is marked by you, against the solution.")
     if kind == "proof":
         return Verdict("unverifiable", "Proofs can't be machine-checked; the tutor will review your working.")
     if not normalise(user_answer):

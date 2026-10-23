@@ -21,7 +21,7 @@ _NUMBER = re.compile(r"(?<![\w^_{])(?<!\d\.)-?\d+(?:\.\d+)?(?![\w^_}])(?!\.\d)")
 def secret_values(problem: dict) -> list:
     """The values that would give the answer away, as SymPy objects."""
     answer = problem["answer"]
-    if problem["answer_type"] == "proof":
+    if problem["answer_type"] in ("proof", "self"):
         return []
     if problem["answer_type"] == "multiple_choice":
         letter = verify._choice_letter(answer)
