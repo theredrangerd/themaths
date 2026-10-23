@@ -56,6 +56,8 @@ def normalise(s: str) -> str:
     }
     for a, b in replacements.items():
         s = s.replace(a, b)
+    # A trailing "+ C" is a constant of integration, not part of the answer.
+    s = re.sub(r"\s*\+\s*[Cc]\s*$", "", s)
     return s.strip()
 
 

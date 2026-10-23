@@ -13,4 +13,4 @@ At least one of them is wrong. Work out which:
 2. Re-derive your answer carefully, step by step.
 3. Fix whichever is wrong, so that the answer and the code agree. If the problem itself is ambiguous or flawed, rewrite it so it is sound.
 
-Return the complete JSON again with every field.
+Reply again in full, in the same format, with every section.

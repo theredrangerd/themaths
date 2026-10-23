@@ -5,48 +5,21 @@ Every action is an async generator of event dicts, sent to the browser as Server
   {"type": "thinking", "chars": n}      the model is reasoning (its thoughts are never shown;
                                          they would give the answer away)
   {"type": "delta", "text": ...}        streamed reply text
+  {"type": "writing", "chars": n}       a hidden reply (it contains the answer) is n characters along
   {"type": "done", ...}                 final payload
   {"type": "error", "text": ...}
 """
 
 import asyncio
-import json
+import logging
 import random
 import re
 import time
 
-from . import db, jsonfix, ollama, prompts, sandbox, taxonomy, verify
+from . import db, ollama, prompts, sandbox, sections, taxonomy, verify
+from .config import DATA_DIR
 
-_TAGS = {
-    "statement": {"type": "string"},
-    "track": {"type": "string", "enum": ["IB", "AMC"]},
-    "topic": {"type": "string"},
-    "subtopic": {"type": "string"},
-    "difficulty": {"type": "string"},
-}
-DRAFT_FORMAT = {
-    "type": "object",
-    "properties": {
-        **_TAGS,
-        "answer_type": {"type": "string", "enum": list(verify.ANSWER_TYPES)},
-        "answer": {"type": "string"},
-        "choices": {"type": "array", "items": {"type": "string"}},
-        "verification": {"type": "string"},
-    },
-    "required": [*_TAGS, "answer_type", "answer", "verification"],
-}
-FINISH_FORMAT = {
-    "type": "object",
-    "properties": {
-        "solution": {"type": "string"},
-        "hints": {"type": "array", "items": {"type": "string"}},
-        "distractors": {"type": "array", "items": {"type": "string"}},
-        "consistent": {"type": "boolean"},
-        "concern": {"type": "string"},
-    },
-    "required": ["solution", "hints", "distractors", "consistent", "concern"],
-}
-
+log = logging.getLogger("themaths.tutor")
 
 # Shared helpers ---------------------------------------------------------
 
@@ -54,8 +27,10 @@ def _messages(user: str, history: list[dict] | None = None) -> list[dict]:
     return [{"role": "system", "content": prompts.system()}, *(history or []), {"role": "user", "content": user}]
 
 
-async def _stream(model: str, messages: list[dict], think: bool, out: list[str], **kw):
-    """Forward a model stream as events; collect the reply text into out[0]."""
+async def _stream(model: str, messages: list[dict], think: bool, out: list[str], show: bool = True, **kw):
+    """Forward a model stream as events; collect the reply text into out[0].
+
+    With show=False (replies that contain the answer) only progress is reported."""
     thinking, text = 0, []
     last_sent = 0.0
     async for kind, chunk in ollama.chat(model, messages, think=think, **kw):
@@ -66,16 +41,21 @@ async def _stream(model: str, messages: list[dict], think: bool, out: list[str],
                 yield {"type": "thinking", "chars": thinking}
         else:
             text.append(chunk)
-            if "format" not in kw:
+            if show:
                 yield {"type": "delta", "text": chunk}
+            elif time.monotonic() - last_sent > 0.5:
+                last_sent = time.monotonic()
+                yield {"type": "writing", "chars": sum(map(len, text))}
     out.append("".join(text))
 
 
-def _parse_json(text: str) -> dict:
-    m = re.search(r"\{.*\}", text, re.S)
-    if not m:
-        raise json.JSONDecodeError("no JSON object", text, 0)
-    return json.loads(jsonfix.repair(m.group(0)))
+def _save_debug(kind: str, text: str) -> str:
+    """Keep a reply we couldn't use, for diagnosing prompt or parsing problems."""
+    folder = DATA_DIR / "debug"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{time.strftime('%Y%m%d-%H%M%S')}-{kind}.txt"
+    path.write_text(text)
+    return str(path)
 
 
 def _public(attempt: dict, problem: dict) -> dict:
@@ -121,8 +101,14 @@ def _working(text: str) -> str:
 #      and a problem still disputed after the last retry is discarded. (Letting the code
 #      win was tried; the code sometimes answers a different question.) If the code
 #      cannot run, the problem is served as "unverified".
-#   2. The model writes the solution, hints and (for AMC) four distractors, aimed at the
-#      settled answer.
+#   2. The model solves the problem again without being told the answer, and writes the
+#      hints and (for AMC) four distractors. Its boxed answer must match the settled one;
+#      otherwise the problem goes back for another try, and is discarded after the last.
+#      (Telling it the answer was tried; it would notice a contradiction and then fudge
+#      its working to reach the given answer anyway.)
+
+AGAIN = "Reply again in full, in the same format, with every section."
+
 
 def _constraints(track: str | None, topic: str | None, difficulty: str | None) -> str:
     parts = []
@@ -139,16 +125,24 @@ def _check_draft(data: dict, imported: bool) -> str | None:
     """Return a description of what is wrong with a stage 1 payload, or None."""
     for field in ("statement", "answer", "verification"):
         if not str(data.get(field, "")).strip():
-            return f"The field {field} is empty."
+            return f"The {field} section is empty."
     if data.get("answer_type") not in verify.ANSWER_TYPES:
-        return "answer_type is not one of the allowed values."
+        return "The answer type is not one of the allowed values."
+    if not imported and data.get("track") == "AMC":
+        if data["answer_type"] == "proof":
+            return "AMC problems have a single numerical answer, not a proof."
+        try:
+            if verify.to_sympy(data["answer"]).free_symbols:
+                return "AMC answers are a single number (exact values like 2\\sqrt{3} are fine), not a formula in variables. Fix concrete values in the problem."
+        except Exception:
+            pass
     if data["answer_type"] == "multiple_choice":
         if not imported:
             return "Do not use multiple_choice; give the answer's own type. Options are added later."
         if len(data.get("choices") or []) != 5:
-            return "A multiple-choice problem needs its five option values in choices."
+            return "A multiple-choice problem needs its five option values in the Choices section."
         if not re.fullmatch(r"\(?[A-Ea-e]\)?", data["answer"].strip()):
-            return "For multiple_choice, answer must be a single letter A to E."
+            return "For multiple_choice, the answer must be a single letter A to E."
     return None
 
 
@@ -170,6 +164,16 @@ def _settle(draft: dict) -> dict:
     # Neither side is trustworthy on its own: the code may answer a different question,
     # and the model's arithmetic may be wrong. The caller asks the model to reconcile them.
     return {"status": "disputed", "answer": draft["answer"], "computed": computed, "why": why}
+
+
+def _solution_agrees(boxed: str, draft: dict, settled: dict) -> bool:
+    """Does the blind solution's boxed answer match the settled answer?"""
+    value = re.sub(r"\\text(?:bf)?\{([^{}]*)\}", r"\1", boxed or "").strip()
+    if draft["answer_type"] == "multiple_choice" and (m := re.match(r"^\(?([A-Ea-e])\)?(?:\s|$)", value)):
+        value = m.group(1)
+    target = {"answer": settled["answer"], "answer_type": draft["answer_type"], "choices": draft.get("choices") or []}
+    ok, _ = verify.agrees(value, target)
+    return ok
 
 
 def _distractors_ok(answer: str, distractors: list[str]) -> list[str] | None:
@@ -203,17 +207,14 @@ def _order_choices(answer: str, distractors: list[str]) -> tuple[list[str], str]
     return options, "ABCDE"[options.index(answer)]
 
 
-async def _json_call(model: str, prompt: str, schema: dict, settings: dict, history: list[dict]):
-    """One structured call. Yields events; the final event is {"type": "_json", ...}."""
+async def _sections_call(model: str, prompt: str, parse, settings: dict, history: list[dict]):
+    """One hidden call parsed into sections. The final event is {"type": "_parsed", ...}."""
     out: list[str] = []
-    async for event in _stream(model, _messages(prompt, history), settings["think"], out, format=schema, temperature=0.7):
+    async for event in _stream(model, _messages(prompt, history), settings["think"], out, show=False, temperature=0.7):
         yield event
     raw = out[0]
-    try:
-        data = _parse_json(raw)
-    except json.JSONDecodeError:
-        data = None
-    yield {"type": "_json", "data": data, "raw": raw}
+    fields, missing = parse(raw)
+    yield {"type": "_parsed", "fields": fields, "missing": missing, "raw": raw}
 
 
 async def create_problem(
@@ -263,81 +264,99 @@ async def create_problem(
     best = None  # (draft, settled, finish)
     for i in range(tries):
         yield {"type": "status", "text": "Writing a problem" if i == 0 else f"Trying again ({i + 1} of {tries})"}
-        draft = None
-        async for event in _json_call(model, user_msg, DRAFT_FORMAT, settings, history):
-            if event["type"] == "_json":
-                draft, raw = event["data"], event["raw"]
+        async for event in _sections_call(model, user_msg, sections.draft, settings, history):
+            if event["type"] == "_parsed":
+                draft, missing, raw = event["fields"], event["missing"], event["raw"]
             else:
                 yield event
         history += [{"role": "user", "content": user_msg}, {"role": "assistant", "content": raw}]
-        if draft is None:
-            user_msg = "That was not valid JSON. Return the complete JSON object only."
-            continue
         if imported:
             draft["statement"] = statement
+            missing = [m for m in missing if m != "statement"]
+        if missing:
+            log.warning("draft %d: missing sections %s, saved to %s", i + 1, missing, _save_debug("draft", raw))
+            user_msg = f"Your reply was missing these sections: {', '.join(missing)}. {AGAIN}"
+            continue
         if issue := _check_draft(draft, imported):
-            user_msg = f"{issue} Return the complete JSON again with every field."
+            log.warning("draft %d: %s", i + 1, issue)
+            user_msg = f"{issue} {AGAIN}"
             continue
 
         yield {"type": "status", "text": "Checking the answer by computation"}
         settled = await asyncio.to_thread(_settle, draft)
+        log.warning("draft %d: %s; answer=%r computed=%r %s", i + 1, settled["status"], draft["answer"],
+                    settled.get("computed"), settled.get("error") or settled.get("why") or "")
+        if settled.get("error"):
+            log.warning("draft %d: failing code saved to %s", i + 1, _save_debug("code", draft["verification"]))
         if settled.get("error") and i + 1 < tries:
-            user_msg = f"Your verification code failed: {settled['error']}. Fix it. Return the complete JSON again with every field."
+            fix = (
+                "Rewrite it so the code derives the answer itself: for example, loop over the candidates and test the "
+                "problem's conditions, or set up the equations in sympy and solve them."
+                if "literal" in settled["error"] else "Fix it."
+            )
+            user_msg = f"Your verification code failed: {settled['error']}. {fix} {AGAIN}"
             continue
         if settled["status"] == "disputed":
             user_msg = prompts.render("reconcile", answer=draft["answer"], computed=settled["computed"], code=draft["verification"])
             continue
 
-        yield {"type": "status", "text": "Writing the solution and hints"}
+        yield {"type": "status", "text": "Solving it independently and writing hints"}
         mc_new = not imported and draft.get("track") == "AMC" and draft["answer_type"] != "proof"
-        shown_answer = settled["answer"]
-        if draft["answer_type"] == "multiple_choice":
-            letter = settled["answer"]
-            value = draft["choices"]["ABCDE".index(letter.strip("()").upper())]
-            shown_answer = f"({letter}) {value}"
+        if mc_new:
+            choices_task = "It will be shown as a five-option multiple-choice contest problem, but solve it as free response."
+            boxed_rule = " Box the value itself."
+        elif draft["answer_type"] == "multiple_choice":
+            choices_task = "It is multiple choice; the options are part of the problem above."
+            boxed_rule = " Box the letter of the correct option, e.g. \\boxed{C}."
+        else:
+            choices_task, boxed_rule = "", ""
         finish_prompt = prompts.render(
             "finish",
             statement=draft["statement"],
-            answer=shown_answer,
-            choices_task="This is a five-option multiple-choice contest problem." if mc_new else "",
+            choices_task=choices_task,
+            boxed_rule=boxed_rule,
             distractor_rule=(
-                "exactly four wrong answers, each a value a student would plausibly reach by a specific common mistake "
-                "(e.g. an off-by-one, overcounting, a sign error). Plain LaTeX without $ signs, all different from the answer and each other."
-                if mc_new else "an empty list."
+                "Exactly four wrong answers, one per line as \"- value\", each a value a student would plausibly reach by a "
+                "specific common mistake (an off-by-one, overcounting, a sign error). All different from the correct answer and each other."
+                if mc_new else "Leave empty."
             ),
         )
         finish, distractors = None, None
         for _ in range(2):
-            async for event in _json_call(model, finish_prompt, FINISH_FORMAT, settings, []):
-                if event["type"] == "_json":
-                    finish = event["data"]
+            async for event in _sections_call(model, finish_prompt, sections.finish, settings, []):
+                if event["type"] == "_parsed":
+                    finish, missing, raw = event["fields"], event["missing"], event["raw"]
                 else:
                     yield event
-            if not finish or not str(finish.get("solution", "")).strip():
+            if missing:
+                log.warning("draft %d: finish missing %s, saved to %s", i + 1, missing, _save_debug("finish", raw))
                 finish = None
                 continue
             if mc_new:
-                distractors = await asyncio.to_thread(_distractors_ok, settled["answer"], finish.get("distractors") or [])
+                distractors = await asyncio.to_thread(_distractors_ok, settled["answer"], finish["distractors"])
                 if distractors is None:
+                    log.warning("draft %d: unusable distractors %s", i + 1, finish["distractors"])
                     finish = None
                     continue
             break
         if finish is None:
-            user_msg = "Write a different problem that meets the same request. Return the complete JSON with every field."
+            log.warning("draft %d: finish stage failed twice", i + 1)
+            user_msg = f"Write a different problem that meets the same request. {AGAIN}"
             continue
 
+        # The solution was written without seeing the answer: a third, independent route.
+        if draft["answer_type"] != "proof":
+            agree = await asyncio.to_thread(_solution_agrees, finish["boxed"], draft, settled)
+            log.warning("draft %d: blind solution boxed %r, %s", i + 1, finish["boxed"], "agrees" if agree else "DISAGREES")
+            if not agree:
+                user_msg = prompts.render("mismatch", answer=draft["answer"], other=finish["boxed"], solution=finish["solution"])
+                continue
+            if settled["status"] == "verified":
+                settled["note"] = (
+                    f"The tutor's answer, an independent computation and a separately worked solution all gave {settled['computed']}."
+                )
         best = (draft, settled, finish, distractors)
-        if finish.get("consistent", True):
-            break
-        concern = str(finish.get("concern", "")).strip()
-        if i + 1 == tries:
-            settled["status"] = "unverified"
-            settled["note"] = f"{settled.get('note', '')} When writing the solution, the tutor doubted this answer: {concern}".strip()
-            break
-        user_msg = (
-            f"When writing a solution for the answer {settled['answer']}, you concluded: {concern} "
-            "Write a different, sound problem instead. Return the complete JSON with every field."
-        )
+        break
 
     if best is None:
         yield {
@@ -368,7 +387,7 @@ async def create_problem(
             "verification": draft.get("verification"),
             "verification_status": settled["status"],
             "verification_note": settled.get("note", ""),
-            "hints": [str(h) for h in (finish.get("hints") or [])][:3],
+            "hints": finish["hints"],
             "solution": finish["solution"],
             "model": model,
         }

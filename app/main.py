@@ -1,6 +1,7 @@
 import csv
 import io
 import json
+import logging
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
@@ -10,6 +11,7 @@ from pydantic import BaseModel
 from . import db, ollama, progress, taxonomy, tutor
 from .config import STATIC_DIR
 
+logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(name)s %(message)s")
 app = FastAPI(title="themaths")
 db.init()
 

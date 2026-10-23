@@ -102,12 +102,14 @@
   // deltas into a post, done/error resolve.
   async function runStream(url, body, { busyText, post, onDone }) {
     setBusy(busyText);
+    let stage = busyText;
     let text = "";
     let errored = false;
     try {
       await stream(url, body, (e) => {
-        if (e.type === "status") setBusy(e.text);
-        else if (e.type === "thinking") setBusy(`${busyText.replace(/…$/, "")}, thinking…`);
+        if (e.type === "status") { stage = e.text; setBusy(e.text); }
+        else if (e.type === "thinking") setBusy(`${stage.replace(/…$/, "")}, thinking…`);
+        else if (e.type === "writing") setBusy(`${stage.replace(/…$/, "")} (${e.chars.toLocaleString()} characters so far)`);
         else if (e.type === "delta") { text += e.text; post && post.set(text); }
         else if (e.type === "error") { errored = true; showError(e.text, post); }
         else if (e.type === "done") onDone && onDone(e);

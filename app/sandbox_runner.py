@@ -76,7 +76,19 @@ def describe(value) -> str:
         return str(value)
     if isinstance(value, str):
         return value
-    return sp.sstr(sp.sympify(value))
+    return sp.sstr(exact(sp.sympify(value)))
+
+
+def exact(expr):
+    """Replace floats that are really simple fractions (0.5, 0.375) with exact rationals."""
+    import sympy as sp
+
+    subs = {}
+    for f in expr.atoms(sp.Float):
+        r = sp.Rational(float(f)).limit_denominator(10000)
+        if abs(float(r) - float(f)) < 1e-12:
+            subs[f] = r
+    return sp.expand(expr.xreplace(subs)) if subs else expr
 
 
 def main() -> None:

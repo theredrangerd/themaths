@@ -43,3 +43,10 @@ def test_hardcoded_result_is_rejected():
     out = run("# 10 + 10 + 5 + 1\nresult = 26")
     assert not out["ok"] and "literal" in out["error"]
     assert run("total = 26\nresult = total")["ok"]
+
+
+def test_clean_floats_become_exact():
+    assert run("from sympy import symbols\nm = symbols('m')\nresult = (m - 1) * (1/2)")["result"] == "m/2 - 1/2"
+    assert run("result = 6 / 16")["result"] == "3/8"
+    # A float with no simple fraction behind it is left alone.
+    assert run("import math\nresult = math.pi / 3")["result"].startswith("1.047")

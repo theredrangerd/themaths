@@ -1,17 +1,25 @@
-Here is a practice problem and its answer. The answer was computed directly by code and should be taken as correct.
+Here is a practice problem. Solve it from scratch and write its teaching material. You are deliberately not told the answer: your solution is an independent check, so work carefully and trust your own reasoning.
 
 Problem:
 {{statement}}
 
-Answer: {{answer}}
-
 {{choices_task}}
 
-Write the teaching material for this problem.
+Reply in exactly this format: each section starts with its `## ` heading on its own line. Write LaTeX normally; nothing needs escaping.
 
-Return JSON with these fields:
-- solution: a complete, elegant worked solution in Markdown with LaTeX that reaches exactly the answer above, explaining why each step is taken. End with the final answer.
-- hints: exactly three strings. 1: a nudge that redirects attention without naming the method. 2: names the tool, theorem or property that unlocks the problem. 3: states the next concrete step without carrying it out. No hint may state or imply the final answer.
-- distractors: {{distractor_rule}}
-- consistent: true if you can reach the answer above by sound reasoning; false if, after careful work, you believe the answer or the problem is wrong.
-- concern: if consistent is false, one or two sentences on what is wrong; otherwise an empty string.
+## Solution
+A complete, elegant worked solution in Markdown with LaTeX, explaining why each step is taken. End with the final answer in \boxed{...}.{{boxed_rule}}
+
+## Hint 1
+A nudge that redirects attention without naming the method.
+
+## Hint 2
+Names the tool, theorem or property that unlocks the problem.
+
+## Hint 3
+States the next concrete step without carrying it out.
+
+## Distractors
+{{distractor_rule}}
+
+No hint may state or imply the final answer.

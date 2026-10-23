@@ -78,3 +78,20 @@ def test_agrees_reports_wrong_choice():
     ok, note = agrees("3", prob)
     assert not ok and "choice C" in note
     assert agrees("2", prob)[0]
+
+
+@pytest.mark.parametrize(
+    "user,truth",
+    [
+        (r"\frac{x^3}{3}\ln x - \frac{x^3}{9} + C", "x**3*log(x)/3 - x**3/9"),
+        ("x^2/2 + c", "x^2/2"),
+        ("x^2/2", r"\frac{x^2}{2} + C"),
+    ],
+)
+def test_constant_of_integration_is_ignored(user, truth):
+    assert check(user, p(truth)).result == "correct"
+
+
+def test_capital_c_elsewhere_is_kept():
+    # Only a trailing "+ C" is a constant of integration.
+    assert check("C + 1", p("2")).result == "incorrect"
