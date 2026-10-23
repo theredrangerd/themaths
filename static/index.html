@@ -14,6 +14,7 @@
       <a class="wordmark" href="#/practice">themaths</a>
       <nav class="nav" aria-label="Main">
         <a href="#/practice" data-view="practice">Practice</a>
+        <a href="#/book" data-view="book">Book</a>
         <a href="#/progress" data-view="progress">Progress</a>
         <a href="#/history" data-view="history">History</a>
         <a href="#/settings" data-view="settings">Settings</a>
@@ -119,6 +120,9 @@
               <button class="btn btn-hint" type="button" id="act-hint">Hint 1</button>
               <button class="btn btn-secondary" type="button" id="act-explain">Why?</button>
               <button class="btn btn-secondary" type="button" id="act-another">Another like this</button>
+              <button class="btn btn-primary" type="button" id="act-got" hidden>Got it</button>
+              <button class="btn btn-secondary" type="button" id="act-missed" hidden>Didn't get it</button>
+              <button class="btn btn-secondary" type="button" id="act-retry" hidden>Try again</button>
               <span class="actions-spacer"></span>
               <button class="btn-link" type="button" id="act-solution">Show solution</button>
               <button class="btn-link btn-link-danger" type="button" id="act-flag">This problem seems wrong</button>
@@ -160,6 +164,22 @@
             <h2 class="side-title">This session</h2>
             <dl class="session-stats" id="session-stats"></dl>
           </section>
+        </aside>
+      </div>
+    </section>
+
+    <!-- Book ------------------------------------------------------------>
+    <section class="view" id="view-book" hidden>
+      <div id="book-index"></div>
+      <div class="practice-grid book-grid" id="book-chapter" hidden>
+        <div class="practice-main" id="book-text"></div>
+        <aside class="book-aside" id="book-aside">
+          <div class="book-tutor" id="book-tutor" hidden>
+            <div class="book-tutor-head">
+              <span class="side-title" id="book-tutor-title"></span>
+              <button class="btn-link" type="button" id="book-close">Close</button>
+            </div>
+          </div>
         </aside>
       </div>
     </section>

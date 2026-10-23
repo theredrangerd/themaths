@@ -19,6 +19,8 @@
     busySince: 0,
     busyTimer: null,
     confirmSolution: false,
+    book: null,          // the chapter on show: { slug, chapter, data }
+    books: null,         // the book list, for titles
     session: { problems: 0, solved: 0, hints: 0 },
   };
 
@@ -159,8 +161,8 @@
 
   function postForEvent(ev) {
     switch (ev.kind) {
-      case "hint": return addPost("hint", HINT_TITLES[ev.level] || "Hint");
-      case "solution": return addPost("solution", "Solution");
+      case "hint": return addPost("hint", ev.meta && ev.meta.book ? "Hint from the book" : HINT_TITLES[ev.level] || "Hint");
+      case "solution": return addPost("solution", solutionTitle());
       case "check": {
         const ok = ev.meta.result === "correct";
         return addPost(ok ? "correct" : "incorrect", ok ? "Correct" : "Not quite", `You answered ${ev.content}`);
@@ -173,6 +175,13 @@
       case "flag": return addPost("flag", "Review of your flag", ev.meta.reason || "");
       default: return addPost(ev.kind, ev.kind);
     }
+  }
+
+  const isBook = (s) => !!s && s.problem.source === "book";
+
+  function solutionTitle() {
+    const p = state.current && state.current.problem;
+    return p && p.verification_status === "tutor_solution" ? "Solution by the tutor, not the book" : "Solution";
   }
 
   function checkBody(ev) {
@@ -212,7 +221,7 @@
     return ok;
   }
 
-  function showAttempt(s, fresh = false) {
+  function showAttempt(s, fresh = false, { keepHash = false } = {}) {
     state.current = s;
     state.confirmSolution = false;
     const p = s.problem;
@@ -228,11 +237,15 @@
     if (p.subtopic) tags.push(`<span class="tag">${escapeHtml(p.subtopic)}</span>`);
     if (p.difficulty) tags.push(`<span class="tag">${escapeHtml(p.track === "AMC" ? `Problems ${p.difficulty.replace("-", "–")}` : p.difficulty)}</span>`);
     if (p.source === "screenshot") tags.push(`<span class="tag">From a screenshot</span>`);
+    if (p.source === "book") tags.push(`<span class="tag">Book problem ${escapeHtml(shortRef(p.book_ref))}</span>`);
     $("problem-tags").innerHTML = tags.join("");
 
     const badge = $("problem-badge");
     badge.dataset.status = p.verification_status;
-    badge.textContent = { verified: "Answer verified", book: "Answer from your book", computed: "Answer computed", unverified: "Unverified answer", not_applicable: "Proof" }[p.verification_status];
+    badge.textContent = {
+      verified: "Answer verified", book: "Answer from your book", computed: "Answer computed", unverified: "Unverified answer", not_applicable: "Proof",
+      from_book: "Answer from the book", tutor_solution: "Solution by the tutor, not the book",
+    }[p.verification_status];
 
     $("problem-statement").innerHTML = render(p.statement);
     $("problem-choices").innerHTML = renderChoices(p.choices);
@@ -241,7 +254,8 @@
     $("answer").value = a.final_answer || "";
     $("answer").placeholder = p.answer_type === "multiple_choice" ? "A letter, A to E" : p.answer_type === "proof" ? "Write your proof in the working box" : "e.g. 3/4, 2\\sqrt{3}";
     $("answer").disabled = p.answer_type === "proof";
-    $("act-check").textContent = p.answer_type === "proof" ? "Submit proof for review" : "Check answer";
+    $("answer").closest(".answer-field").hidden = p.answer_type === "self";
+    $("act-check").textContent = p.answer_type === "proof" ? "Submit proof for review" : p.answer_type === "self" ? "Show the book's answer to compare" : "Check answer";
     updateWorkingPreview();
     updateAnswerPreview();
 
@@ -251,6 +265,8 @@
       book: "Marking uses the answer you entered from your book.",
       unverified: "The tutor's answer couldn't be confirmed by computation. Answers are still marked against it, so if a verdict looks wrong, flag the problem.",
       not_applicable: "Proofs can't be checked by computation. The tutor reviews your proof instead.",
+      from_book: "Marking uses the book's answer.",
+      tutor_solution: "The book has no solution for this one, so the tutor wrote and checked it.",
     }[p.verification_status];
     delete $("verify-text").dataset.noted;
     if (p.verification_note) {
@@ -268,17 +284,28 @@
     $("explain-form").hidden = $("flag-form").hidden = true;
 
     const target = `#/attempt/${s.attempt_id}`;
-    if (location.hash !== target) history.replaceState(null, "", target);
+    if (!keepHash && location.hash !== target) history.replaceState(null, "", target);
     if (fresh) {
       $("problem").scrollIntoView({ block: "start", behavior: "auto" });
       $("working").focus({ preventScroll: true });
     }
     renderSession();
+    if (isBook(s)) syncBookMarks();
   }
 
   function syncLadder() {
     const level = state.current ? state.current.attempt.hint_level : 0;
-    for (const li of $("ladder").children) li.classList.toggle("used", Number(li.dataset.level) <= level);
+    const bookHints = isBook(state.current) ? state.current.problem.book_hints || 0 : 0;
+    for (const li of $("ladder").children) {
+      const rung = Number(li.dataset.level);
+      li.classList.toggle("used", rung <= level);
+      const name = li.querySelector(".rung-name");
+      const desc = li.querySelector(".rung-desc");
+      if (!li.dataset.name) { li.dataset.name = name.textContent; li.dataset.desc = desc.textContent; }
+      const fromBook = rung < 4 && rung <= bookHints;
+      name.textContent = fromBook ? "Book hint" : li.dataset.name;
+      desc.textContent = fromBook ? "from the book" : li.dataset.desc;
+    }
     const next = Math.min(level + 1, 4);
     const btn = $("act-hint");
     btn.textContent = next === 4 ? "Show solution" : `Hint ${next}`;
@@ -287,7 +314,15 @@
   function syncButtons() {
     const busy = isBusy();
     const has = !!state.current;
-    for (const id of ["act-check", "act-hint", "act-explain", "act-another", "act-solution", "act-flag"]) $(id).disabled = busy || !has;
+    for (const id of ["act-check", "act-hint", "act-explain", "act-another", "act-solution", "act-flag", "act-got", "act-missed", "act-retry"]) $(id).disabled = busy || !has;
+    const book = isBook(state.current);
+    const self = book && state.current.problem.answer_type === "self";
+    const a = has ? state.current.attempt : {};
+    $("act-another").hidden = book;
+    $("act-check").hidden = self && !!a.solution_viewed;
+    $("act-got").hidden = $("act-missed").hidden = !(self && a.solution_viewed && !a.finished_at);
+    $("act-retry").hidden = !(book && a.finished_at);
+    if (book && a.solution_viewed) $("act-hint").disabled = true;
     $("ask-submit").disabled = busy;
     $("screenshot-btn").disabled = busy;
     if (has && state.current.problem.flagged) $("act-flag").disabled = true;
@@ -327,6 +362,7 @@
 
   async function onCheck() {
     const id = state.current.attempt_id;
+    if (state.current.problem.answer_type === "self") return onSolution(true);
     if (state.current.problem.answer_type === "proof") {
       if (!$("working").value.trim()) { $("working").focus(); return; }
       const post = addPost("analysis", "Review of your proof", "The tutor's reading, not machine-checked");
@@ -372,12 +408,14 @@
       $("verify-text").textContent += ` ${s.problem.verification_note}`;
       $("verify-text").dataset.noted = "1";
     }
+    if (isBook(s)) syncBookMarks();
   }
 
   async function onHint() {
     const level = Math.min(state.current.attempt.hint_level + 1, 4);
     if (level === 4) return onSolution(true);
-    const post = addPost("hint", HINT_TITLES[level]);
+    const p = state.current.problem;
+    const post = addPost("hint", isBook(state.current) && level <= (p.book_hints || 0) ? "Hint from the book" : HINT_TITLES[level]);
     state.session.hints++;
     renderSession();
     await runStream(`/api/attempts/${state.current.attempt_id}/hint`, working(), {
@@ -395,12 +433,28 @@
       return;
     }
     state.confirmSolution = false;
-    const post = addPost("solution", "Solution");
+    const post = addPost("solution", solutionTitle());
     await runStream(`/api/attempts/${state.current.attempt_id}/solution`, {}, {
       busyText: "Opening the solution…",
       post,
       onDone: (e) => { post.set(e.text); refresh(e.state); },
     });
+  }
+
+  // A self-marked book problem: after the reveal, the student says how they did.
+  async function onSelf(gotIt) {
+    let s;
+    try { s = await api("POST", `/api/attempts/${state.current.attempt_id}/self`, { got_it: gotIt }); }
+    catch (err) { showError(err.message); return; }
+    if (gotIt) { state.session.solved++; renderSession(); }
+    refresh(s);
+  }
+
+  async function onRetry() {
+    let s;
+    try { s = await api("POST", `/api/attempts/${state.current.attempt_id}/retry`); }
+    catch (err) { showError(err.message); return; }
+    showAttempt(s, false, { keepHash: !$("view-book").hidden });
   }
 
   async function onExplain(ev) {
@@ -477,6 +531,217 @@
       $("screenshot-panel").hidden = true;
       $("import-answer").value = $("import-working").value = "";
     }
+  }
+
+  // Book view -------------------------------------------------------------
+  //
+  // The chapter is read on the left; the Practice tutor (#problem, #work, #thread, #side,
+  // and the busy line) is moved beside it, or below the card on a narrow screen, so every
+  // existing handler keeps working. It is moved back when another view is shown.
+
+  const BOX_LABELS = { important: "Important", concept: "Concept", warning: "Warning", sidenote: "Sidenote", extra: "Extra!" };
+  const KIND_LABELS = { intext: "Problem", exercise: "Exercise", review: "Review problem", challenge: "Challenge problem" };
+  const MARKS = { started: "Started", seen: "Solution seen", solved: "Solved", unaided: "Solved unaided" };
+  const MARK_OUTCOME = { started: "open", seen: "gave_up", solved: "correct", unaided: "correct" };
+  const TUTOR_PARTS = ["busy", "problem", "work", "thread", "side"];
+  const tutorHomes = new Map();
+  const narrow = matchMedia("(max-width: 980px)");
+
+  const shortRef = (bookRef) => (bookRef || "").split("/").slice(2).join("/");
+  const bookHash = (slug, chapter, ref) =>
+    `#/book/${encodeURIComponent(slug)}/${encodeURIComponent(chapter)}${ref ? `/${encodeURIComponent(ref)}` : ""}`;
+  const chapterUrl = (slug, chapter) => `/api/books/${encodeURIComponent(slug)}/${encodeURIComponent(chapter)}`;
+  const cardFor = (ref) => [...document.querySelectorAll(".book-card")].find((c) => c.dataset.ref === ref);
+
+  function moveTutorIn(ref) {
+    const tutor = $("book-tutor");
+    for (const id of TUTOR_PARTS) {
+      const el = $(id);
+      if (!tutorHomes.has(id)) {
+        const mark = document.createComment(id);
+        el.before(mark);
+        tutorHomes.set(id, mark);
+      }
+      tutor.appendChild(el);
+    }
+    $("book-tutor-title").textContent = `Working on ${ref}`;
+    tutor.hidden = false;
+    for (const c of document.querySelectorAll(".book-card")) c.classList.toggle("is-active", c.dataset.ref === ref);
+    placeTutor();
+  }
+
+  function moveTutorHome() {
+    for (const [id, mark] of tutorHomes) mark.replaceWith($(id));
+    tutorHomes.clear();
+    $("book-tutor").hidden = true;
+    $("book-aside").appendChild($("book-tutor"));
+    for (const c of document.querySelectorAll(".book-card.is-active")) c.classList.remove("is-active");
+  }
+
+  // Wide: a sticky column beside the text. Narrow: straight after the card being worked on.
+  function placeTutor() {
+    const tutor = $("book-tutor");
+    if (tutor.hidden || !isBook(state.current)) return;
+    const card = cardFor(shortRef(state.current.problem.book_ref));
+    if (narrow.matches && card) card.after(tutor);
+    else $("book-aside").appendChild(tutor);
+  }
+
+  async function showBookIndex() {
+    const body = $("book-index");
+    try { state.books = await api("GET", "/api/books"); }
+    catch (err) { body.innerHTML = `<p class="empty-page">${escapeHtml(err.message)}</p>`; return; }
+    if (!state.books.length) {
+      body.innerHTML = `<h1 class="page-title">Book</h1><div class="empty-page">No books yet. Add a book's folder to <code>books/</code> and reload.</div>`;
+      return;
+    }
+    body.innerHTML = `<h1 class="page-title">Book</h1>${state.books.map((b) => `
+      <h2 class="section-title">${escapeHtml(b.title)}</h2>
+      <ul class="history-list">${b.chapters.map((c) => `<li class="history-item"><a href="${bookHash(b.slug, c.slug)}">
+        <span class="history-statement">Chapter ${escapeHtml(String(c.number))}: ${escapeHtml(c.title || "")}</span>
+      </a></li>`).join("")}</ul>`).join("")}`;
+  }
+
+  function blockHtml(b) {
+    if ("prose" in b) return `<div class="math-prose book-prose">${render(b.prose)}</div>`;
+    if ("box" in b) {
+      return `<aside class="book-box"><h3 class="side-title">${escapeHtml(BOX_LABELS[b.box] || b.box)}</h3>
+        <div class="math-prose">${render(b.text)}</div></aside>`;
+    }
+    const p = b.problem;
+    return `<article class="problem book-card" data-ref="${escapeHtml(p.ref)}">
+      <header class="problem-head">
+        <span class="book-card-ref">${escapeHtml(KIND_LABELS[p.kind] || "Problem")} ${escapeHtml(p.ref)}</span>
+        <span class="outcome book-mark"></span>
+      </header>
+      <div class="math-prose book-card-statement">${render(p.preamble || "")}${render(p.statement)}</div>
+      <div class="row-actions">
+        <button class="btn btn-secondary" type="button" data-act="open">Work on this</button>
+        ${p.kind === "intext" ? `<button class="btn-link" type="button" data-act="reveal">Show the book's solution</button>` : ""}
+      </div>
+    </article>`;
+  }
+
+  function renderChapter() {
+    const { slug, chapter, data } = state.book;
+    const ch = data.chapter;
+    const book = (state.books || []).find((b) => b.slug === slug);
+    const heading = (s) => [s.number, s.title].filter((x) => x !== undefined && x !== null && x !== "").map(String).map(escapeHtml).join(" ");
+    $("book-aside").appendChild($("book-tutor"));
+    $("book-text").innerHTML = `
+      <p class="book-crumb"><a href="#/book">${escapeHtml(book ? book.title : slug)}</a></p>
+      <h1 class="page-title">Chapter ${escapeHtml(String(ch.number))}: ${escapeHtml(ch.title)}</h1>
+      <p class="book-summary" id="book-summary"></p>
+      <nav class="book-toc" aria-label="Sections">
+        <h2 class="side-title">Sections</h2>
+        <ol>${ch.sections.map((s, i) => `<li><a href="${bookHash(slug, chapter)}" data-section="${i}">${heading(s)}</a>${s.star ? ` <span class="optional">Optional</span>` : ""}</li>`).join("")}</ol>
+      </nav>
+      ${ch.sections.map((s, i) => `<section class="book-section" id="book-sec-${i}">
+        <h2 class="section-title">${heading(s)}${s.star ? ` <span class="tag">Optional</span>` : ""}</h2>
+        ${s.blocks.map(blockHtml).join("")}
+      </section>`).join("")}`;
+    patchMarks();
+  }
+
+  function patchMarks() {
+    const { statuses, summary } = state.book.data;
+    for (const card of document.querySelectorAll(".book-card")) {
+      const st = statuses[card.dataset.ref];
+      const mark = card.querySelector(".book-mark");
+      mark.textContent = st ? MARKS[st] : "";
+      if (st) mark.dataset.outcome = MARK_OUTCOME[st];
+      else delete mark.dataset.outcome;
+    }
+    const seen = summary.seen;
+    $("book-summary").textContent =
+      `${summary.solved} of ${summary.total} solved, ${summary.unaided} without help, ${seen} solution${seen === 1 ? "" : "s"} seen`;
+  }
+
+  // Refetch the chapter's statuses and patch the marks, without re-rendering the text.
+  let marksSeq = 0;
+  async function syncBookMarks() {
+    const b = state.book;
+    if (!b || !b.data) return;
+    const seq = ++marksSeq;
+    let data;
+    try { data = await api("GET", chapterUrl(b.slug, b.chapter)); } catch (_) { return; }
+    if (seq !== marksSeq || state.book !== b) return;
+    b.data.statuses = data.statuses;
+    b.data.summary = data.summary;
+    patchMarks();
+  }
+
+  async function showBook(slug, chapter, ref) {
+    const hash = location.hash;
+    if (!slug || !chapter) {
+      moveTutorHome();
+      $("book-chapter").hidden = true;
+      $("book-index").hidden = false;
+      return showBookIndex();
+    }
+    $("book-index").hidden = true;
+    $("book-chapter").hidden = false;
+    if (!state.book || state.book.slug !== slug || state.book.chapter !== chapter) {
+      moveTutorHome();
+      const b = (state.book = { slug, chapter, data: null });
+      $("book-text").innerHTML = `<p class="post-waiting">Loading the chapter…</p>`;
+      try {
+        if (!state.books) state.books = await api("GET", "/api/books").catch(() => []);
+        b.data = await api("GET", chapterUrl(slug, chapter));
+      } catch (err) {
+        if (state.book === b) {
+          state.book = null;
+          $("book-text").innerHTML = `<div class="empty-page">${escapeHtml(err.message)} <a href="#/book">All books</a></div>`;
+        }
+        return;
+      }
+      if (state.book !== b || location.hash !== hash) return;
+      renderChapter();
+    } else {
+      syncBookMarks();
+    }
+    if (!ref) { moveTutorHome(); return; }
+
+    const full = `${slug}/${chapter}/${ref}`;
+    if (!isBook(state.current) || state.current.problem.book_ref !== full) {
+      if (isBusy()) return;
+      let s;
+      try { s = await api("POST", `${chapterUrl(slug, chapter)}/problems/${encodeURIComponent(ref)}/open`); }
+      catch (err) {
+        const card = cardFor(ref);
+        if (card) card.querySelector(".row-actions").insertAdjacentHTML("beforeend", `<span class="field-help">${escapeHtml(err.message)}</span>`);
+        return;
+      }
+      if (location.hash !== hash) return;
+      showAttempt(s, false, { keepHash: true });
+      moveTutorIn(ref);
+      if (!narrow.matches) $("working").focus({ preventScroll: true });
+      return;
+    }
+    moveTutorIn(ref);
+  }
+
+  async function openCard(ref, reveal) {
+    if (isBusy() || !state.book) return;
+    const { slug, chapter } = state.book;
+    const target = bookHash(slug, chapter, ref);
+    if (location.hash !== target) history.pushState(null, "", target);
+    await showBook(slug, chapter, ref);
+    const cur = state.current;
+    if (reveal && isBook(cur) && cur.problem.book_ref === `${slug}/${chapter}/${ref}` && !cur.attempt.solution_viewed) onSolution(true);
+  }
+
+  function onBookClick(e) {
+    const section = e.target.closest("[data-section]");
+    if (section) {
+      e.preventDefault();
+      $(`book-sec-${section.dataset.section}`).scrollIntoView({ block: "start" });
+      return;
+    }
+    const btn = e.target.closest("[data-act]");
+    if (!btn) return;
+    const card = btn.closest(".book-card");
+    if (card) openCard(card.dataset.ref, btn.dataset.act === "reveal");
   }
 
   // Progress view ---------------------------------------------------------
@@ -615,12 +880,15 @@
   async function route() {
     const hash = location.hash || "#/practice";
     const m = hash.match(/^#\/attempt\/(\d+)/);
-    const view = m ? "practice" : hash.slice(2) || "practice";
+    const parts = hash.slice(2).split("/").map((x) => { try { return decodeURIComponent(x); } catch (_) { return x; } });
+    const view = m ? "practice" : parts[0] || "practice";
     for (const v of document.querySelectorAll(".view")) v.hidden = v.id !== `view-${view}`;
     for (const a of document.querySelectorAll(".nav a")) {
       if (a.dataset.view === view) a.setAttribute("aria-current", "page");
       else a.removeAttribute("aria-current");
     }
+    if (view !== "book") moveTutorHome();
+    if (view === "book") showBook(parts[1], parts[2], parts.slice(3).join("/") || null);
     if (view === "progress") showProgress();
     if (view === "history") showHistory();
     if (view === "settings") showSettings();
@@ -673,6 +941,9 @@
     $("act-explain").addEventListener("click", () => { $("flag-form").hidden = true; $("explain-form").hidden = !$("explain-form").hidden; if (!$("explain-form").hidden) $("explain-q").focus(); });
     $("act-flag").addEventListener("click", () => { $("explain-form").hidden = true; $("flag-form").hidden = !$("flag-form").hidden; if (!$("flag-form").hidden) $("flag-reason").focus(); });
     $("act-another").addEventListener("click", () => generate({ related_attempt: state.current.attempt_id }));
+    $("act-got").addEventListener("click", () => onSelf(true));
+    $("act-missed").addEventListener("click", () => onSelf(false));
+    $("act-retry").addEventListener("click", onRetry);
     $("explain-form").addEventListener("submit", onExplain);
     $("flag-form").addEventListener("submit", onFlag);
 
@@ -692,6 +963,10 @@
       const f = [...(e.dataTransfer?.files || [])].find((x) => x.type.startsWith("image/"));
       if (f) { e.preventDefault(); transcribe(f); }
     });
+
+    $("book-text").addEventListener("click", onBookClick);
+    $("book-close").addEventListener("click", () => { if (state.book) location.hash = bookHash(state.book.slug, state.book.chapter); });
+    narrow.addEventListener("change", placeTutor);
 
     $("settings-form").addEventListener("submit", saveSettings);
     window.addEventListener("hashchange", route);
