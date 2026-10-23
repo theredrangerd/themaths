@@ -114,13 +114,15 @@ def _working(text: str) -> str:
 
 # Problem creation -------------------------------------------------------
 #
-# Two stages, because small models are far better at writing brute-force code than at
-# mental arithmetic:
+# Two stages:
 #   1. The model writes the problem, its own answer, and code that computes the answer.
-#      The code runs in the sandbox. If the two agree the problem is "verified"; if they
-#      disagree the computed value wins and the problem is marked "computed".
+#      The code runs in the sandbox. If the two agree, the problem is "verified". If they
+#      disagree, neither is trusted: the model is shown both and asked to reconcile them,
+#      and a problem still disputed after the last retry is discarded. (Letting the code
+#      win was tried; the code sometimes answers a different question.) If the code
+#      cannot run, the problem is served as "unverified".
 #   2. The model writes the solution, hints and (for AMC) four distractors, aimed at the
-#      settled answer. If it cannot reach that answer it says so and stage 1 is retried.
+#      settled answer.
 
 def _constraints(track: str | None, topic: str | None, difficulty: str | None) -> str:
     parts = []
@@ -159,29 +161,15 @@ def _settle(draft: dict) -> dict:
         return {"status": "unverified", "answer": draft["answer"], "error": out["error"],
                 "note": f"The checking code failed ({out['error']}), so the answer rests on the tutor alone."}
     computed = out["result"]
-    agree, _ = verify.agrees(computed, draft)
+    agree, why = verify.agrees(computed, draft)
     if agree:
         # Store the computed form: it is already simplified (6120, not a sum of binomials).
         answer = draft["answer"] if draft["answer_type"] == "multiple_choice" else computed
         return {"status": "verified", "answer": answer, "computed": computed,
                 "note": f"The tutor's answer and an independent computation both gave {computed}."}
-    if draft["answer_type"] == "multiple_choice":
-        for letter, c in zip("ABCDE", draft.get("choices") or []):
-            try:
-                if verify.equal(verify.to_sympy(computed), verify.to_sympy(c)):
-                    return {"status": "computed", "answer": letter, "computed": computed,
-                            "note": f"The tutor first said {draft['answer']}, but computation gives {computed}, which is option {letter}."}
-            except Exception:
-                continue
-        return {"status": "unverified", "answer": draft["answer"], "computed": computed,
-                "note": f"Computation gives {computed}, which matches none of the options."}
-    try:
-        verify.to_sympy(computed)
-    except Exception:
-        return {"status": "unverified", "answer": draft["answer"], "computed": computed,
-                "note": f"The computation's output ({computed}) couldn't be read."}
-    return {"status": "computed", "answer": computed, "computed": computed,
-            "note": f"The tutor first said {draft['answer']}, but direct computation gives {computed}; the computed value is used."}
+    # Neither side is trustworthy on its own: the code may answer a different question,
+    # and the model's arithmetic may be wrong. The caller asks the model to reconcile them.
+    return {"status": "disputed", "answer": draft["answer"], "computed": computed, "why": why}
 
 
 def _distractors_ok(answer: str, distractors: list[str]) -> list[str] | None:
@@ -255,10 +243,11 @@ async def create_problem(
             )
             track = track or p["track"]
             topic = topic or p["topic"]
-        recent = db.recent_statements(track, topic)
+        # Name only the recent subtopics: shown full statements, small models copy them.
+        recent = db.recent_subtopics(track, topic)
         avoid = ""
         if recent:
-            avoid = "Do not repeat or closely imitate these recent problems:\n" + "\n".join(f"- {s[:240]}" for s in recent)
+            avoid = "Recent problems covered: " + ", ".join(recent) + ". Prefer a different angle or subtopic if the request allows."
         prompt = prompts.render(
             "generate",
             request=request.strip() or "Any problem suited to the constraints below.",
@@ -294,6 +283,9 @@ async def create_problem(
         settled = await asyncio.to_thread(_settle, draft)
         if settled.get("error") and i + 1 < tries:
             user_msg = f"Your verification code failed: {settled['error']}. Fix it. Return the complete JSON again with every field."
+            continue
+        if settled["status"] == "disputed":
+            user_msg = prompts.render("reconcile", answer=draft["answer"], computed=settled["computed"], code=draft["verification"])
             continue
 
         yield {"type": "status", "text": "Writing the solution and hints"}
@@ -348,7 +340,11 @@ async def create_problem(
         )
 
     if best is None:
-        yield {"type": "error", "text": "The model didn't produce a usable problem. Try again, or rephrase the request."}
+        yield {
+            "type": "error",
+            "text": "The model couldn't produce a problem whose answer checks out, so none is shown. "
+            "Try again, or ask for something a little different. A larger tutor model fails less often.",
+        }
         return
 
     draft, settled, finish, distractors = best

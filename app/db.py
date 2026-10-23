@@ -163,18 +163,18 @@ def get_events(attempt_id: int) -> list[dict]:
     return [{**dict(r), "meta": json.loads(r["meta"])} for r in rows]
 
 
-def recent_statements(track: str | None, topic: str | None, limit: int = 6) -> list[str]:
-    q, args = "SELECT statement FROM problems WHERE 1=1", []
+def recent_subtopics(track: str | None, topic: str | None, limit: int = 6) -> list[str]:
+    q, args = "SELECT DISTINCT subtopic FROM (SELECT subtopic FROM problems WHERE subtopic != ''", []
     if track:
         q += " AND track = ?"
         args.append(track)
     if topic:
         q += " AND topic = ?"
         args.append(topic)
-    q += " ORDER BY id DESC LIMIT ?"
+    q += " ORDER BY id DESC LIMIT ?)"
     args.append(limit)
     with tx() as c:
-        return [r["statement"] for r in c.execute(q, args).fetchall()]
+        return [r["subtopic"] for r in c.execute(q, args).fetchall()]
 
 
 def history(limit: int = 200) -> list[dict]:

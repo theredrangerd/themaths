@@ -39,8 +39,8 @@ Generating a problem takes two model calls:
 
 1. The model writes the problem, its own answer, and Python code that computes the answer (brute force where possible). The code runs in a restricted subprocess.
    - If the two agree, the problem is marked **Answer verified**.
-   - If they disagree, the computed value is used and the problem is marked **Answer computed**.
-   - If the code fails, it's marked **Unverified answer**.
+   - If they disagree, the model is asked to reconcile them. A problem that stays disputed is discarded rather than shown.
+   - If the code can't run, the problem is shown as **Unverified answer**.
 2. The model writes the solution, hints and, for AMC, four plausible wrong options aimed at the settled answer.
 
 ## Models

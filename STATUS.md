@@ -1,4 +1,4 @@
-# Status: where v1 stands (2026-10-19)
+# Status: where v1 stands (updated 2026-10-23)
 
 Working notes for picking the build back up. SPEC.md is the target; this file is the gap.
 
@@ -17,9 +17,13 @@ Two stages:
 
 1. **Draft.** The model returns JSON with the problem, its own answer, and checking code. The code runs in the sandbox.
    - If the answer and the code agree: `verified`.
-   - If they disagree: the computed value wins, and the status is `computed`.
-   - If the code fails: `unverified`.
-2. **Finish.** The model writes the solution, the hints, and for AMC four distractors, all aimed at the settled answer. The app sorts the five AMC options and assigns the letter.
+   - If they disagree: neither is trusted. The model is shown both (`prompts/reconcile.md`) and asked to fix whichever is wrong. If they still disagree after the last retry, the problem is **discarded**, not served.
+   - If the code can't run: `unverified`.
+2. **Finish.** The model writes the solution, the hints, and for AMC four distractors, all aimed at the settled answer.
+
+The first version let the computed value win on disagreement (status `computed`). Testing showed this was wrong: qwen3:8b wrote code that answered a different question ("compute n" when the problem asked "how many n"). The code won, and the solution step then fudged arithmetic to reach the wrong value while claiming `consistent: true`. Old rows with status `computed` may still exist in a database; the UI still labels them.
+
+The "avoid" list in the generation prompt now names recent **subtopics** only. When shown full recent statements, qwen3:8b copied them almost word for word.
 
 ## Benchmark findings (stage 1 only)
 
@@ -34,7 +38,7 @@ Ollama's defaults caused the early failures: a 4096-token context and no output 
 
 The default is now `think: false` with qwen3:8b.
 
-**Main weakness:** with an 8B model, problem quality is mediocre. Problems can be dull or mis-tagged, and sometimes the checking code doesn't model the problem, in which case a `computed` answer can be wrong (seen once). A bigger model is the real fix. Try `qwen3:14b` (about 9 GB), or `qwen3:30b-a3b` if memory allows.
+**Main weakness:** qwen3:8b without thinking is not good enough to write AMC-level problems. In end-to-end runs it produced the same nonsense "counting" problem twice, and its checking code often answered a different question. A stronger model is the real fix: `qwen3:14b` is being downloaded (2026-10-23) for benchmarking. `gpt-oss:20b` (about 14 GB) is the next candidate if 14B isn't enough.
 
 ## Not yet done or verified
 
