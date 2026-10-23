@@ -59,7 +59,7 @@ def test_path_traversal_404s(client, path):
 
 
 def test_secret_image_needs_unlocked_attempt(client):
-    url = f"{CH}/img/fig.png"
+    url = f"{CH}/img/sol.png"
     assert client.get(url).status_code == 404
     a = open_(client, "1.1.2")
     assert client.get(url, params={"attempt": a}).status_code == 404
@@ -67,6 +67,11 @@ def test_secret_image_needs_unlocked_attempt(client):
     assert client.get(url, params={"attempt": a}).status_code == 200
     assert client.get(url).status_code == 404
     assert client.get(url, params={"attempt": 9999}).status_code == 404
+
+
+def test_image_in_public_text_and_solution_is_public(client):
+    # fig.png is in the prose, a box and a hint as well as a solution: no attempt needed.
+    assert client.get(f"{CH}/img/fig.png").status_code == 200
 
 
 def test_self_endpoint_conflict_before_reveal(client):

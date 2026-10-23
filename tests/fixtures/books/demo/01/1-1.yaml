@@ -52,7 +52,7 @@ blocks:
       statement: |
         Describe the shape of a gizmo curve.
       solution: |
-        See the picture: ![](img/fig.png) and the secret-solution-three.
+        See the picture: ![](img/fig.png), ![](img/sol.png) and the secret-solution-three.
       answer_type: self
       answer: ""
   - problem:

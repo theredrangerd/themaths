@@ -249,7 +249,22 @@ def problem_row(ch: dict, problem: dict) -> dict:
 
 
 def secret_images(ch: dict) -> set[str]:
-    return {m[2] for _, p in _problems(ch) for m in _IMG_LINK.finditer(p["solution"])}
+    """Images referenced only in solutions. One also used in any public text, or in a hint, is public."""
+    def names(text: str) -> set[str]:
+        return {m[2] for m in _IMG_LINK.finditer(text or "")}
+
+    in_solutions: set[str] = set()
+    public: set[str] = set()
+    for sec in ch["sections"]:
+        for b in sec["blocks"]:
+            if "problem" not in b:
+                public |= names(b.get("prose", "")) | names(b.get("text", ""))
+                continue
+            p = b["problem"]
+            in_solutions |= names(p["solution"])
+            for text in (p["preamble"], p["statement"], *p["hints"], *p["tutor_hints"]):
+                public |= names(text)
+    return in_solutions - public
 
 
 def image_path(book: str, chapter: str, name: str) -> Path:

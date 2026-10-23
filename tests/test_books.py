@@ -103,7 +103,17 @@ def test_hash_changes_with_content(copy_book):
 
 
 def test_secret_images(book_env):
-    assert books.secret_images(_ch()) == {"fig.png"}
+    # sol.png is only in a solution; fig.png is also in prose, a box and a hint, so it is public.
+    assert books.secret_images(_ch()) == {"sol.png"}
+
+
+def test_image_in_solution_and_public_text_is_not_secret(copy_book):
+    def edit(d):
+        p = _problems(d)[0]
+        p["solution"] += "\n![](img/sol.png)"
+        p["statement"] += "\n![](img/sol.png)"
+    _edit(copy_book, edit)
+    assert books.secret_images(_ch()) == set()
 
 
 @pytest.mark.parametrize("which", ["dup", "type", "statement", "kind", "no_type"])
