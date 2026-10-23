@@ -60,6 +60,22 @@
             <p class="panel-help">Correct anything the model misread, then start the problem.</p>
             <textarea id="screenshot-text" class="code-input" rows="7" spellcheck="false"></textarea>
             <div class="preview math-prose" id="screenshot-preview"></div>
+            <div class="import-fields">
+              <div class="field">
+                <div class="field-head">
+                  <label for="import-answer">Answer from your book <span class="optional">Optional</span></label>
+                  <span class="field-help">Only the final answer. The tutor checks its own work against it; it's never shown back to you.</span>
+                </div>
+                <input id="import-answer" class="code-input answer-input" type="text" spellcheck="false" placeholder="e.g. 24, \frac{3}{4}, C">
+              </div>
+              <div class="field">
+                <div class="field-head">
+                  <label for="import-working">Your working so far <span class="optional">Optional</span></label>
+                  <span class="field-help">Your first hint will start from here.</span>
+                </div>
+                <textarea id="import-working" class="code-input" rows="4" spellcheck="false" placeholder="Where you got to, and where you're stuck"></textarea>
+              </div>
+            </div>
             <div class="row-actions">
               <button class="btn btn-primary" type="button" id="screenshot-use">Start this problem</button>
               <button class="btn btn-quiet" type="button" id="screenshot-discard">Discard</button>

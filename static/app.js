@@ -232,7 +232,7 @@
 
     const badge = $("problem-badge");
     badge.dataset.status = p.verification_status;
-    badge.textContent = { verified: "Answer verified", computed: "Answer computed", unverified: "Unverified answer", not_applicable: "Proof" }[p.verification_status];
+    badge.textContent = { verified: "Answer verified", book: "Answer from your book", computed: "Answer computed", unverified: "Unverified answer", not_applicable: "Proof" }[p.verification_status];
 
     $("problem-statement").innerHTML = render(p.statement);
     $("problem-choices").innerHTML = renderChoices(p.choices);
@@ -248,10 +248,15 @@
     $("verify-text").textContent = {
       verified: "The tutor's answer was confirmed by an independent computation, so marking is reliable.",
       computed: "The answer was computed directly by code, which disagreed with the tutor's first attempt. Marking uses the computed value. If the problem itself seems flawed, flag it.",
+      book: "Marking uses the answer you entered from your book.",
       unverified: "The tutor's answer couldn't be confirmed by computation. Answers are still marked against it, so if a verdict looks wrong, flag the problem.",
       not_applicable: "Proofs can't be checked by computation. The tutor reviews your proof instead.",
     }[p.verification_status];
-    if (p.verification_note && a.finished_at) $("verify-text").textContent += ` ${p.verification_note}`;
+    delete $("verify-text").dataset.noted;
+    if (p.verification_note) {
+      $("verify-text").textContent += ` ${p.verification_note}`;
+      $("verify-text").dataset.noted = "1";
+    }
 
     $("thread").innerHTML = "";
     for (const ev of s.events) {
@@ -363,7 +368,7 @@
     state.current = s;
     syncLadder();
     syncButtons();
-    if (s.problem.verification_note && s.attempt.finished_at && !$("verify-text").dataset.noted) {
+    if (s.problem.verification_note && !$("verify-text").dataset.noted) {
       $("verify-text").textContent += ` ${s.problem.verification_note}`;
       $("verify-text").dataset.noted = "1";
     }
@@ -441,6 +446,7 @@
     $("screenshot-panel").hidden = false;
     $("screenshot-text").value = "";
     $("screenshot-preview").innerHTML = "";
+    $("import-answer").value = $("import-working").value = "";
     let text = "";
     await runStream("/api/transcribe", { image }, {
       busyText: "Reading the screenshot…",
@@ -457,11 +463,20 @@
   async function importScreenshot() {
     const statement = $("screenshot-text").value.trim();
     if (!statement) return;
-    const ok = await runStream("/api/problems/import", { statement, track: $("opt-track").value || null }, {
-      busyText: "Solving it so hints and marking work…",
+    const body = {
+      statement,
+      book_answer: $("import-answer").value,
+      working: $("import-working").value,
+      track: $("opt-track").value || null,
+    };
+    const ok = await runStream("/api/problems/import", body, {
+      busyText: "Preparing hints for this problem…",
       onDone: (e) => { state.session.problems++; showAttempt(e.state, true); },
     });
-    if (ok) $("screenshot-panel").hidden = true;
+    if (ok) {
+      $("screenshot-panel").hidden = true;
+      $("import-answer").value = $("import-working").value = "";
+    }
   }
 
   // Progress view ---------------------------------------------------------

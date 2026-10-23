@@ -50,6 +50,8 @@ class GenerateIn(BaseModel):
 
 class ImportIn(BaseModel):
     statement: str
+    book_answer: str = ""
+    working: str = ""
     track: str | None = None
 
 
@@ -104,7 +106,8 @@ def generate(body: GenerateIn):
 def import_problem(body: ImportIn):
     if not body.statement.strip():
         raise HTTPException(400, "The problem is empty.")
-    return sse(tutor.create_problem(statement=body.statement.strip(), track=body.track))
+    return sse(tutor.import_problem(statement=body.statement.strip(), book_answer=body.book_answer,
+                                    working=body.working, track=body.track))
 
 
 @app.post("/api/transcribe")

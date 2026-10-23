@@ -324,7 +324,7 @@ select, input[type="number"] {
   padding: 3px 9px;
   border-radius: var(--radius-s);
 }
-.badge[data-status="verified"], .badge[data-status="computed"] { color: var(--ok); background: var(--ok-bg); }
+.badge[data-status="verified"], .badge[data-status="computed"], .badge[data-status="book"] { color: var(--ok); background: var(--ok-bg); }
 .badge[data-status="unverified"] { color: var(--hint); background: var(--hint-bg); }
 .badge[data-status="not_applicable"] { color: var(--muted); background: var(--surface); }
 
@@ -536,6 +536,7 @@ select, input[type="number"] {
 }
 .panel-title { font-family: var(--serif); font-size: 20px; margin: 0 0 4px; }
 .panel-help { margin: 0 0 10px; color: var(--muted); font-size: 13.5px; }
+.import-fields { margin-top: 14px; }
 .row-actions { display: flex; gap: 8px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
 
 /* Progress ------------------------------------------------------------ */

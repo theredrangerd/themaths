@@ -60,8 +60,10 @@ def _save_debug(kind: str, text: str) -> str:
 
 def _public(attempt: dict, problem: dict) -> dict:
     problem = dict(problem)
-    if not attempt["finished_at"]:
-        # The note quotes the computed answer; keep it back until the problem is finished.
+    if problem["source"] == "generated" and not attempt["finished_at"]:
+        # A generated problem's note quotes the computed answer; keep it back until the
+        # problem is finished. Notes on imported problems never quote the answer, and
+        # their warnings matter before the first hint.
         problem["verification_note"] = None
     return {
         "attempt_id": attempt["id"],
@@ -217,6 +219,85 @@ async def _sections_call(model: str, prompt: str, parse, settings: dict, history
     yield {"type": "_parsed", "fields": fields, "missing": missing, "raw": raw}
 
 
+def _finish_prompt(draft: dict, mc_new: bool) -> str:
+    if mc_new:
+        choices_task = "It will be shown as a five-option multiple-choice contest problem, but solve it as free response."
+    elif draft["answer_type"] == "multiple_choice":
+        choices_task = "It is multiple choice; the options are part of the problem above."
+    else:
+        choices_task = ""
+    return prompts.render(
+        "finish",
+        statement=draft["statement"],
+        choices_task=choices_task,
+        boxed_rule=_boxed_rule(draft, mc_new),
+        distractor_rule=(
+            "Exactly four wrong answers, one per line as \"- value\", each a value a student would plausibly reach by a "
+            "specific common mistake (an off-by-one, overcounting, a sign error). All different from the correct answer and each other."
+            if mc_new else "Leave empty."
+        ),
+    )
+
+
+def _boxed_rule(draft: dict, mc_new: bool) -> str:
+    if mc_new:
+        return " Box the value itself."
+    if draft["answer_type"] == "multiple_choice":
+        return " Box the letter of the correct option, e.g. \\boxed{C}."
+    return ""
+
+
+async def _solve_blind(model: str, settings: dict, prompt: str, label: str, answer_for_distractors: str | None = None):
+    """Up to two tries at a stage 2 reply. The final event is {"type": "_solved", "finish", "distractors"}."""
+    finish, distractors = None, None
+    for _ in range(2):
+        async for event in _sections_call(model, prompt, sections.finish, settings, []):
+            if event["type"] == "_parsed":
+                finish, missing, raw = event["fields"], event["missing"], event["raw"]
+            else:
+                yield event
+        if missing:
+            log.warning("%s: solution missing %s, saved to %s", label, missing, _save_debug("finish", raw))
+            finish = None
+            continue
+        if answer_for_distractors is not None:
+            distractors = await asyncio.to_thread(_distractors_ok, answer_for_distractors, finish["distractors"])
+            if distractors is None:
+                log.warning("%s: unusable distractors %s", label, finish["distractors"])
+                finish = None
+                continue
+        break
+    yield {"type": "_solved", "finish": finish, "distractors": distractors}
+
+
+def _as_letter(value: str, choices: list[str]) -> str | None:
+    """A multiple-choice answer given as a letter or as one option's value, as a letter."""
+    v = re.sub(r"\\text(?:bf)?\{([^{}]*)\}", r"\1", value or "").strip()
+    if m := re.match(r"^\(?([A-Ea-e])\)?(?:\s|$)", v):
+        return m.group(1).upper()
+    for letter, c in zip("ABCDE", choices):
+        try:
+            if verify.equal(verify.to_sympy(v), verify.to_sympy(c)):
+                return letter
+        except Exception:
+            continue
+    return None
+
+
+def _same(a: str | None, b: str | None, draft: dict) -> bool:
+    """Do two answers to this problem agree? Never raises."""
+    if not a or not b:
+        return False
+    try:
+        if draft["answer_type"] == "multiple_choice":
+            la, lb = _as_letter(a, draft["choices"]), _as_letter(b, draft["choices"])
+            return la is not None and la == lb
+        ok, _ = verify.agrees(a, {"answer": b, "answer_type": draft["answer_type"], "choices": []})
+        return ok
+    except Exception:
+        return False
+
+
 async def create_problem(
     *,
     request: str = "",
@@ -224,39 +305,34 @@ async def create_problem(
     topic: str | None = None,
     difficulty: str | None = None,
     related_attempt: int | None = None,
-    statement: str | None = None,
 ):
     settings = db.get_settings()
     model = settings["reasoning_model"]
-    imported = statement is not None
     constraints = _constraints(track, topic, difficulty)
 
-    if imported:
-        prompt = prompts.render("import", statement=statement, constraints=constraints, taxonomy=taxonomy.as_prompt_text())
-    else:
-        related = ""
-        if related_attempt and (found := db.get_attempt(related_attempt)):
-            p = found[1]
-            related = (
-                "Write a problem thematically related to the one below, on the same idea, but distinct: "
-                "different setting and numbers, and ideally a twist that tests the idea from another angle.\n\n"
-                f"Previous problem:\n{p['statement']}"
-            )
-            track = track or p["track"]
-            topic = topic or p["topic"]
-        # Name only the recent subtopics: shown full statements, small models copy them.
-        recent = db.recent_subtopics(track, topic)
-        avoid = ""
-        if recent:
-            avoid = "Recent problems covered: " + ", ".join(recent) + ". Prefer a different angle or subtopic if the request allows."
-        prompt = prompts.render(
-            "generate",
-            request=request.strip() or "Any problem suited to the constraints below.",
-            constraints=constraints,
-            taxonomy=taxonomy.as_prompt_text(),
-            related=related,
-            avoid=avoid,
+    related = ""
+    if related_attempt and (found := db.get_attempt(related_attempt)):
+        p = found[1]
+        related = (
+            "Write a problem thematically related to the one below, on the same idea, but distinct: "
+            "different setting and numbers, and ideally a twist that tests the idea from another angle.\n\n"
+            f"Previous problem:\n{p['statement']}"
         )
+        track = track or p["track"]
+        topic = topic or p["topic"]
+    # Name only the recent subtopics: shown full statements, small models copy them.
+    recent = db.recent_subtopics(track, topic)
+    avoid = ""
+    if recent:
+        avoid = "Recent problems covered: " + ", ".join(recent) + ". Prefer a different angle or subtopic if the request allows."
+    prompt = prompts.render(
+        "generate",
+        request=request.strip() or "Any problem suited to the constraints below.",
+        constraints=constraints,
+        taxonomy=taxonomy.as_prompt_text(),
+        related=related,
+        avoid=avoid,
+    )
 
     tries = int(settings["retries"]) + 1
     history: list[dict] = []
@@ -270,14 +346,11 @@ async def create_problem(
             else:
                 yield event
         history += [{"role": "user", "content": user_msg}, {"role": "assistant", "content": raw}]
-        if imported:
-            draft["statement"] = statement
-            missing = [m for m in missing if m != "statement"]
         if missing:
             log.warning("draft %d: missing sections %s, saved to %s", i + 1, missing, _save_debug("draft", raw))
             user_msg = f"Your reply was missing these sections: {', '.join(missing)}. {AGAIN}"
             continue
-        if issue := _check_draft(draft, imported):
+        if issue := _check_draft(draft, imported=False):
             log.warning("draft %d: %s", i + 1, issue)
             user_msg = f"{issue} {AGAIN}"
             continue
@@ -301,44 +374,13 @@ async def create_problem(
             continue
 
         yield {"type": "status", "text": "Solving it independently and writing hints"}
-        mc_new = not imported and draft.get("track") == "AMC" and draft["answer_type"] != "proof"
-        if mc_new:
-            choices_task = "It will be shown as a five-option multiple-choice contest problem, but solve it as free response."
-            boxed_rule = " Box the value itself."
-        elif draft["answer_type"] == "multiple_choice":
-            choices_task = "It is multiple choice; the options are part of the problem above."
-            boxed_rule = " Box the letter of the correct option, e.g. \\boxed{C}."
-        else:
-            choices_task, boxed_rule = "", ""
-        finish_prompt = prompts.render(
-            "finish",
-            statement=draft["statement"],
-            choices_task=choices_task,
-            boxed_rule=boxed_rule,
-            distractor_rule=(
-                "Exactly four wrong answers, one per line as \"- value\", each a value a student would plausibly reach by a "
-                "specific common mistake (an off-by-one, overcounting, a sign error). All different from the correct answer and each other."
-                if mc_new else "Leave empty."
-            ),
-        )
-        finish, distractors = None, None
-        for _ in range(2):
-            async for event in _sections_call(model, finish_prompt, sections.finish, settings, []):
-                if event["type"] == "_parsed":
-                    finish, missing, raw = event["fields"], event["missing"], event["raw"]
-                else:
-                    yield event
-            if missing:
-                log.warning("draft %d: finish missing %s, saved to %s", i + 1, missing, _save_debug("finish", raw))
-                finish = None
-                continue
-            if mc_new:
-                distractors = await asyncio.to_thread(_distractors_ok, settled["answer"], finish["distractors"])
-                if distractors is None:
-                    log.warning("draft %d: unusable distractors %s", i + 1, finish["distractors"])
-                    finish = None
-                    continue
-            break
+        mc_new = draft.get("track") == "AMC" and draft["answer_type"] != "proof"
+        async for event in _solve_blind(model, settings, _finish_prompt(draft, mc_new), f"draft {i + 1}",
+                                        settled["answer"] if mc_new else None):
+            if event["type"] == "_solved":
+                finish, distractors = event["finish"], event["distractors"]
+            else:
+                yield event
         if finish is None:
             log.warning("draft %d: finish stage failed twice", i + 1)
             user_msg = f"Write a different problem that meets the same request. {AGAIN}"
@@ -378,7 +420,7 @@ async def create_problem(
     problem_id = db.insert_problem(
         {
             **tags,
-            "source": "screenshot" if imported else "generated",
+            "source": "generated",
             "request": request,
             "statement": draft["statement"],
             "choices": [str(c) for c in choices],
@@ -393,6 +435,137 @@ async def create_problem(
         }
     )
     attempt_id = db.start_attempt(problem_id)
+    yield {"type": "done", "state": attempt_state(attempt_id)}
+
+
+async def import_problem(*, statement: str, book_answer: str = "", working: str = "", track: str | None = None):
+    """Prepare a problem the student brought (usually a screenshot) for hints and marking.
+
+    Unlike generated problems, an imported one is never discarded: the student needs help
+    with this exact problem. The book's answer, when given, is the truth; otherwise the
+    tutor's answer, its checking code and a blind solution vote, and disagreement is shown.
+    """
+    settings = db.get_settings()
+    model = settings["reasoning_model"]
+    book = book_answer.strip()
+    prompt = prompts.render("import", statement=statement, constraints=_constraints(track, None, None),
+                            taxonomy=taxonomy.as_prompt_text())
+
+    # Stage 1: tags, the tutor's own answer, and checking code.
+    draft, history, user_msg = None, [], prompt
+    for i in range(2):
+        yield {"type": "status", "text": "Reading the problem" if i == 0 else "Reading the problem again"}
+        async for event in _sections_call(model, user_msg, sections.draft, settings, history):
+            if event["type"] == "_parsed":
+                fields, missing, raw = event["fields"], event["missing"], event["raw"]
+            else:
+                yield event
+        history += [{"role": "user", "content": user_msg}, {"role": "assistant", "content": raw}]
+        fields["statement"] = statement
+        missing = [m for m in missing if m != "statement"]
+        issue = f"Your reply was missing these sections: {', '.join(missing)}." if missing else _check_draft(fields, imported=True)
+        if not issue:
+            draft = fields
+            break
+        log.warning("import draft %d: %s, saved to %s", i + 1, issue, _save_debug("import", raw))
+        user_msg = f"{issue} {AGAIN}"
+    if draft is None:
+        yield {"type": "error", "text": "The tutor couldn't make sense of this problem. Check the transcription for errors and try again."}
+        return
+
+    truth = None
+    if book and draft["answer_type"] == "multiple_choice":
+        truth = _as_letter(book, draft["choices"])
+        if truth is None:
+            # The options weren't transcribed in a usable way; treat it as free response.
+            draft["answer_type"], draft["choices"] = "exact_expression", []
+    if book and truth is None and draft["answer_type"] != "proof":
+        truth = book
+
+    settled = {"status": "not_applicable", "answer": draft["answer"]}
+    if draft["answer_type"] != "proof":
+        yield {"type": "status", "text": "Checking the tutor's answer by computation"}
+        settled = await asyncio.to_thread(_settle, draft)
+        log.warning("import: %s; answer=%r computed=%r book=%r", settled["status"], draft["answer"], settled.get("computed"), truth)
+
+    # Stage 2: the tutor solves it without being told any answer.
+    yield {"type": "status", "text": "Solving it and writing hints"}
+    finish = None
+    async for event in _solve_blind(model, settings, _finish_prompt(draft, False), "import"):
+        if event["type"] == "_solved":
+            finish = event["finish"]
+        else:
+            yield event
+    if finish is None:
+        yield {"type": "error", "text": "The tutor couldn't write a solution to this problem. Try again; if it keeps failing, a larger tutor model may help."}
+        return
+    boxed = finish["boxed"]
+    log.warning("import: blind solution boxed %r", boxed)
+
+    if draft["answer_type"] == "proof":
+        status, answer, note = "not_applicable", draft["answer"], ""
+    elif truth is not None:
+        answer, status = truth, "book"
+        if await asyncio.to_thread(_same, boxed, truth, draft):
+            status, note = "verified", "The tutor's worked solution reaches the answer from your book."
+        else:
+            yield {"type": "status", "text": "The tutor disagreed with your book; finding its mistake"}
+            fixed = None
+            correct_prompt = prompts.render("correct", boxed=boxed, book=book, statement=statement,
+                                            solution=finish["solution"], boxed_rule=_boxed_rule(draft, False))
+            async for event in _solve_blind(model, settings, correct_prompt, "import correction"):
+                if event["type"] == "_solved":
+                    fixed = event["finish"]
+                else:
+                    yield event
+            if fixed and await asyncio.to_thread(_same, fixed["boxed"], truth, draft):
+                finish = fixed
+                note = "The tutor's first solution disagreed with your book's answer; it found its mistake and corrected it."
+            else:
+                note = ("The tutor couldn't reach your book's answer, so its hints and solution may be unreliable. "
+                        "Marking uses your book's answer.")
+            log.warning("import: correction %s", "succeeded" if fixed and finish is fixed else "failed")
+    else:
+        # No book answer: majority vote between the tutor, its code and its blind solution.
+        votes = {"the tutor's answer": draft["answer"], "a computation": settled.get("computed"), "a worked solution": boxed}
+        names = list(votes)
+        agreeing = [(a, b) for k, a in enumerate(names) for b in names[k + 1:]
+                    if await asyncio.to_thread(_same, votes[a], votes[b], draft)]
+        if settled["status"] == "verified" and _same(boxed, settled["answer"], draft):
+            status, answer = "verified", settled["answer"]
+            note = "The tutor's answer, an independent computation and a worked solution all agree."
+        elif agreeing:
+            a, b = agreeing[0]
+            answer, status = votes[a], "unverified"
+            if draft["answer_type"] == "multiple_choice":
+                answer = _as_letter(answer, draft["choices"]) or answer
+            note = f"Only {a} and {b} agreed, so the tutor isn't certain of the answer. Entering your book's answer makes marking reliable."
+        else:
+            answer, status = (draft["answer"] if draft["answer"] else boxed), "unverified"
+            note = ("The tutor's methods all disagreed, so its answer, hints and marking may be wrong. "
+                    "Entering your book's answer makes marking reliable.")
+
+    tags = taxonomy.normalise_tags(draft["track"], draft["topic"], draft["subtopic"], draft["difficulty"])
+    problem_id = db.insert_problem(
+        {
+            **tags,
+            "source": "screenshot",
+            "request": "",
+            "statement": statement,
+            "choices": draft["choices"] if draft["answer_type"] == "multiple_choice" else [],
+            "answer_type": draft["answer_type"],
+            "answer": str(answer).strip(),
+            "verification": draft.get("verification"),
+            "verification_status": status,
+            "verification_note": note,
+            "hints": finish["hints"],
+            "solution": finish["solution"],
+            "model": model,
+        }
+    )
+    attempt_id = db.start_attempt(problem_id)
+    if working.strip():
+        db.update_attempt(attempt_id, working=working)
     yield {"type": "done", "state": attempt_state(attempt_id)}
 
 
