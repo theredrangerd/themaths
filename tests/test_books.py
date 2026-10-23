@@ -50,13 +50,20 @@ def test_public_rewrites_images_in_statements(book_env):
     assert "(/api/books/demo/01/img/fig.png)" in out
 
 
+def test_public_rewrites_images_everywhere(book_env):
+    blocks = books.public_chapter(_ch())["sections"][0]["blocks"]
+    url = "(/api/books/demo/01/img/fig.png)"
+    assert url in blocks[-2]["prose"] and "(img/" not in blocks[-2]["prose"]
+    assert url in blocks[-1]["text"] and "(img/" not in blocks[-1]["text"]
+
+
 def test_ladder_book_hints_first(book_env):
     ch = _ch()
     rungs, n = books.ladder(books.find_problem(ch, "1.1"))
     assert n == 2 and rungs[2] == "Tutor nudge one: check your arithmetic."
     assert "7" in rungs[1]
     rungs, n = books.ladder(books.find_problem(ch, "1.1.4"))
-    assert rungs == ["Book hint alpha.", "Book hint beta.", "Book hint gamma."] and n == 3
+    assert rungs == ["Book hint alpha. ![](img/fig.png)", "Book hint beta.", "Book hint gamma."] and n == 3
 
 
 def test_problem_row_statuses(book_env):
@@ -72,6 +79,7 @@ def test_problem_row_statuses(book_env):
     assert (r["track"], r["topic"], r["subtopic"]) == ("AMC", "Algebra", "Polynomials")
     assert row("1.1")["book_hints"] == 2 and len(row("1.1")["hints"]) == 3
     assert "(/api/books/demo/01/img/fig.png)" in row("1.1.2")["solution"]
+    assert row("1.1.4")["hints"][0] == "Book hint alpha. ![](/api/books/demo/01/img/fig.png)"
 
 
 def _edit(root, fn):
@@ -98,7 +106,7 @@ def test_secret_images(book_env):
     assert books.secret_images(_ch()) == {"fig.png"}
 
 
-@pytest.mark.parametrize("which", ["dup", "type", "statement"])
+@pytest.mark.parametrize("which", ["dup", "type", "statement", "kind", "no_type"])
 def test_bad_content_names_file_and_ref(copy_book, which):
     def bad(d):
         ps = _problems(d)
@@ -106,6 +114,10 @@ def test_bad_content_names_file_and_ref(copy_book, which):
             ps[1]["ref"] = "1.1"
         elif which == "type":
             ps[1]["answer_type"] = "banana"
+        elif which == "kind":
+            del ps[1]["kind"]
+        elif which == "no_type":
+            del ps[1]["answer_type"]
         else:
             del ps[1]["statement"]
 

@@ -70,7 +70,7 @@ blocks:
       statement: |
         A gizmo has $n$ cogs and $n^2=81$ with $n>0$. Find $n$.
       hints:
-        - "Book hint alpha."
+        - "Book hint alpha. ![](img/fig.png)"
         - "Book hint beta."
         - "Book hint gamma."
         - "Book hint delta."
@@ -81,3 +81,8 @@ blocks:
       answer: "9"
       tutor_hints:
         - "Tutor hint epsilon."
+  - prose: |
+      A closing figure: ![](img/fig.png) end.
+  - box: concept
+    text: |
+      Boxed figure ![](img/fig.png) too.

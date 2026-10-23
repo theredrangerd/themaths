@@ -87,6 +87,8 @@ def _problem(raw, file: str, seen: set) -> dict:
     seen.add(ref)
     p = {**copy.deepcopy(DEFAULTS), **raw}
     _need(p, "statement", str, where)
+    _need(p, "kind", str, where)
+    _need(p, "answer_type", str, where)
     if p["kind"] not in KINDS:
         raise BookError(f"{where}: kind must be one of {', '.join(KINDS)}")
     if p["answer_type"] not in TYPES:
@@ -202,7 +204,11 @@ def public_chapter(ch: dict) -> dict:
                 p["statement"] = _images(p["statement"], ch["book"], ch["slug"])
                 blocks.append({"problem": p})
             else:
-                blocks.append(copy.deepcopy(b))
+                b = copy.deepcopy(b)
+                for key in ("prose", "text"):
+                    if key in b:
+                        b[key] = _images(b[key], ch["book"], ch["slug"])
+                blocks.append(b)
         out["sections"].append({**sec, "blocks": blocks})
     return out
 
@@ -227,7 +233,7 @@ def problem_row(ch: dict, problem: dict) -> dict:
         "source": "book",
         "book_ref": f"{ch['book']}/{ch['slug']}/{problem['ref']}",
         "statement": statement,
-        "hints": hints,
+        "hints": [_images(h, ch["book"], ch["slug"]) for h in hints],
         "book_hints": book_hints,
         "solution": _images(problem["solution"], ch["book"], ch["slug"]),
         "answer_type": problem["answer_type"],
