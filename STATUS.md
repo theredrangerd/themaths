@@ -1,55 +1,76 @@
 # Status: where v1 stands (updated 2026-10-23)
 
-Working notes for picking the build back up. SPEC.md is the target; this file is the gap.
+Working notes for picking the build back up. SPEC.md is the original target; this file records what's built, what testing showed, and what's left.
 
-## Working
+## Main use case
 
-- Backend (FastAPI): generation, screenshot transcription and import, answer checking, the hint ladder, error analysis, "Why?", flagging, progress, history, export, settings. Run `./run.sh`; check offline readiness with `./run.sh --check`.
-- Verifier (`app/verify.py`): equivalent forms, decimals to 3+ significant figures, multiple choice by letter or value, sets, intervals. Tested.
-- Sandbox (`app/sandbox.py`, `app/sandbox_runner.py`): runs model-written checking code in a separate process with an import whitelist, banned builtins, a CPU limit and a timeout. Rejects `result = <literal>`. Tested.
-- JSON repair (`app/jsonfix.py`): models write `\frac` unescaped inside JSON, which the parser reads as a form feed plus "rac". Fixed and tested.
-- Frontend: AoPS-style layout in light and dark, working at phone width. Checked by screenshot: empty state, problem view, check and hint flow, progress page.
-- `pytest`: 32 tests pass.
+The student's main use is **help on problems from their AoPS books**: screenshot a problem, optionally enter the book's final answer and their working so far, then use hints, error analysis and "Why?". AI-generated problems are secondary, and a slightly easy difficulty is acceptable. The student wants a hint, never the book's solution, so the app never asks them to read or paste one.
 
-## Generation pipeline (`app/tutor.py`, `create_problem`)
+## Model
 
-Two stages:
+The default tutor is **qwen3:14b**, with thinking off except where noted below. qwen3:8b was too weak: it served wrong answers marked as verified. Screenshots are read by **gemma4**.
 
-1. **Draft.** The model returns JSON with the problem, its own answer, and checking code. The code runs in the sandbox.
-   - If the answer and the code agree: `verified`.
-   - If they disagree: neither is trusted. The model is shown both (`prompts/reconcile.md`) and asked to fix whichever is wrong. If they still disagree after the last retry, the problem is **discarded**, not served.
-   - If the code can't run: `unverified`.
-2. **Finish.** The model writes the solution, the hints, and for AMC four distractors, all aimed at the settled answer.
+Speed depends heavily on power mode. Low Power Mode cut qwen3:14b from about 14 to 6 tokens per second.
 
-The first version let the computed value win on disagreement (status `computed`). Testing showed this was wrong: qwen3:8b wrote code that answered a different question ("compute n" when the problem asked "how many n"). The code won, and the solution step then fudged arithmetic to reach the wrong value while claiming `consistent: true`. Old rows with status `computed` may still exist in a database; the UI still labels them.
+## How answers are checked
 
-The "avoid" list in the generation prompt now names recent **subtopics** only. When shown full recent statements, qwen3:8b copied them almost word for word.
+### Generated problems (`create_problem`)
 
-## Benchmark findings (stage 1 only)
+1. **Draft.** The model writes the problem, its own answer, and code that computes the answer. The code runs in the sandbox.
+2. **Blind solve.** The model solves the problem again *without being told the answer*.
+3. **Decision.** The problem is served only if all three routes agree. If they disagree, the model is asked to reconcile. A problem still disputed after the last retry is discarded, never shown.
 
-Ollama's defaults caused the early failures: a 4096-token context and no output cap. That produced 10-minute hangs and endless JSON whitespace. `app/ollama.py` now sets `num_ctx` to 16384 and caps `num_predict`.
+### Imported problems (`import_problem`)
 
-| Config | Time | Result |
-|---|---|---|
-| qwen3:8b, no thinking | 9–18 s | OK. The IB integral answer was wrong (π/4 − 1/4) and SymPy corrected it to π/4. |
-| gemma4, no thinking | n/a | JSON string looped until the length cap on both requests |
-| gemma4, thinking | 55 s | Best AMC problem, but its "checking code" hardcoded `result = 26` (now rejected). IB run looped. |
-| qwen3:8b, thinking | not finished | The run was interrupted |
+These are never discarded.
 
-The default is now `think: false` with qwen3:8b.
+- **With the book's answer:** the book's answer is the truth. If the blind solution disagrees, the model is shown the book's answer and asked to find its own mistake (`prompts/correct.md`).
+- **Without it:** the three routes vote, and any disagreement is shown honestly in the note.
 
-**Main weakness:** qwen3:8b without thinking is not good enough to write AMC-level problems. In end-to-end runs it produced the same nonsense "counting" problem twice, and its checking code often answered a different question. A stronger model is the real fix: `qwen3:14b` is being downloaded (2026-10-23) for benchmarking. `gpt-oss:20b` (about 14 GB) is the next candidate if 14B isn't enough.
+### Lessons from testing (each fix has a test or a comment in the code)
 
-## Not yet done or verified
+- **Disagreement is not resolved by letting the code win.** The code sometimes answers a different question.
+- **The solve must be blind.** Told the answer, the model noticed the contradiction and then fudged its working to match.
+- **Plain-text sections, not JSON.** Models write output as `## Heading` sections (`app/sections.py`), because LaTeX inside JSON broke on unescaped backslashes.
+- **No floats, numeric AMC answers.** Checking code must use exact arithmetic, and AMC answers must be numbers.
+- **"+ C" is ignored** when comparing answers.
 
-- [ ] End-to-end run through the UI of a fresh generation since the two-stage rewrite. Each stage was tested separately; the full flow via `/api/problems/generate` was not re-run after the last changes (jsonfix, the computed-answer form, hardcoded-result rejection).
-- [ ] Tested in the browser with a real model reply: hints with typed working, error analysis after a wrong answer, "Why?", flagging, proof review.
-- [ ] Screenshot transcription with gemma4: not exercised yet.
-- [ ] Spec acceptance criterion "run with Wi-Fi off": not tested yet.
-- [ ] Finish the qwen3:8b-with-thinking benchmark, then decide whether thinking should apply to stage 1 only.
-- [ ] Problem variety: the `avoid` list helps, but qwen3:8b still repeats "how many integers less than 1000…"-style problems.
+## Guards on what the student sees
+
+Models that know the answer state it, even when told not to (for example, "8 instead of the correct 9"). `app/leak.py` handles this in code. While a problem is unsolved:
+
+- **Hints, error analysis and "Why?" are written hidden**, then checked for the answer's value in the tutor's own words. Text quoted from the student is ignored. If the answer appears, the model rewrites the reply; if it still appears, the value is replaced with "[hidden]".
+- **Hints are also checked for values the student hasn't reached** (`leak.ahead`), such as "factor pairs of 35" before the student has got to 35. Small integers 0–10 are allowed. If found, the hint is rewritten.
+
+Two more choices settled by testing:
+
+- **Error analysis always uses thinking.** Without it, qwen3:14b blamed a correct step instead of the real mistake (2 of 2 runs). With thinking and the audit prompt it found the real mistake 5 of 5 times, in 24–52 s.
+- **Proof review also uses thinking.** It caught both gaps in a flawed proof.
+
+## Help-loop test results (qwen3:14b, Low Power Mode off, on battery)
+
+| Step | Result |
+|---|---|
+| Screenshot transcription (gemma4) | Perfect in 7 s, including a messy option layout |
+| Import with book answer | 79 s; about 6 min when the tutor must correct itself (AIME 1999 #3) |
+| Import without book answer | 133 s; the vote kept the right answer when the model's own was wrong |
+| Answer check | Instant (SymPy) |
+| Error analysis | Fixed (see above) |
+| "Why?" | Good, about 50 s |
+| Flag review | Correct verdict |
+| Proof review | Accepts a valid proof and catches a flawed one; 60–145 s |
+| Hints | Being fixed: they jumped ahead and did steps for the student. Prompt tightened and `leak.ahead` added; retest in progress |
+
+## Not yet done
+
+- [ ] Finish the hint retest (fresh import with the new hint rules).
+- [ ] Test offline (Wi-Fi off): `./run.sh --check`, then a full import and hint cycle.
+- [ ] Hand-check a few generated problems again on the final pipeline.
+- [ ] Optional, the student passed for now: show a problem early while the blind solve runs, and pre-generate problems.
 
 ## Dev tips
 
-- Use a throwaway database: `THEMATHS_DATA=/tmp/tm ./run.sh`
-- Don't use `uvicorn --reload` while a stream is open: the reload hangs until the stream closes.
+- Use a throwaway database: `THEMATHS_DATA=/tmp/tm ./run.sh`, or a second server on another port.
+- Prompts are read from disk on every call, so editing a prompt changes a running server immediately. Python changes need a restart.
+- Don't use `uvicorn --reload` while a stream is open: the reload hangs.
+- Unusable model replies and failing checking code are saved to `data/debug/`.

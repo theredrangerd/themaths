@@ -16,7 +16,7 @@ import random
 import re
 import time
 
-from . import db, ollama, prompts, sandbox, sections, taxonomy, verify
+from . import db, leak, ollama, prompts, sandbox, sections, taxonomy, verify
 from .config import DATA_DIR
 
 log = logging.getLogger("themaths.tutor")
@@ -539,7 +539,8 @@ async def import_problem(*, statement: str, book_answer: str = "", working: str 
             answer, status = votes[a], "unverified"
             if draft["answer_type"] == "multiple_choice":
                 answer = _as_letter(answer, draft["choices"]) or answer
-            note = f"Only {a} and {b} agreed, so the tutor isn't certain of the answer. Entering your book's answer makes marking reliable."
+            note = (f"{a[0].upper()}{a[1:]} and {b} agree, but the third check didn't, so treat the marking with a little caution. "
+                    "Entering your book's answer makes it reliable.")
         else:
             answer, status = (draft["answer"] if draft["answer"] else boxed), "unverified"
             note = ("The tutor's methods all disagreed, so its answer, hints and marking may be wrong. "
@@ -611,12 +612,45 @@ def check_answer(attempt_id: int, answer: str, working: str) -> dict:
     return {"result": verdict.result, "note": verdict.note, "state": attempt_state(attempt_id)}
 
 
-async def _respond(attempt_id: int, kind: str, prompt: str, level: int | None = None, meta: dict | None = None):
+async def _respond(attempt_id: int, kind: str, prompt: str, *, problem: dict, attempt: dict,
+                   think: bool | None = None, level: int | None = None, meta: dict | None = None,
+                   working: str | None = None):
+    """Reply to the student. While the problem is unsolved, the reply is written hidden and
+    checked for the answer before it is shown: asked not to, small models state it anyway."""
     settings = db.get_settings()
+    model = settings["reasoning_model"]
+    think = settings["think"] if think is None else think
+    guard = not attempt["finished_at"]
     out: list[str] = []
-    async for event in _stream(settings["reasoning_model"], _messages(prompt), settings["think"], out):
+    async for event in _stream(model, _messages(prompt), think, out, show=not guard):
         yield event
     text = out[0].strip()
+    if guard and (found := await asyncio.to_thread(leak.find, text, problem)):
+        log.warning("%s gave the answer away (%s); rewording", kind, found)
+        yield {"type": "status", "text": "Rewording so it doesn't give the answer away"}
+        out = []
+        rewrite = prompts.render("unleak", text=text, leaks=", ".join(dict.fromkeys(found)))
+        async for event in _stream(model, _messages(rewrite), False, out, show=False):
+            yield event
+        rewritten = out[0].strip() or text
+        if still := await asyncio.to_thread(leak.find, rewritten, problem):
+            log.warning("%s still gave the answer away (%s); hiding it", kind, still)
+            rewritten = leak.redact(rewritten, still)
+        text = rewritten
+    if guard and working is not None:
+        # Hints: no values from steps the student hasn't done yet.
+        text = re.sub(r"^\s*\**hint\s*\d\**\s*[:.]\s*", "", text, flags=re.I)
+        if early := leak.ahead(text, problem["statement"], working):
+            log.warning("%s jumped ahead of the student (%s); rewording", kind, early)
+            yield {"type": "status", "text": "Making sure the hint doesn't do the step for you"}
+            out = []
+            rehint = prompts.render("rehint", values=", ".join(early), statement=problem["statement"],
+                                    working=_working(working), text=text)
+            async for event in _stream(model, _messages(rehint), False, out, show=False):
+                yield event
+            rewritten = out[0].strip()
+            if rewritten and not leak.find(rewritten, problem):
+                text = rewritten
     db.add_event(attempt_id, kind, text, level=level, meta=meta)
     yield {"type": "done", "text": text, "state": attempt_state(attempt_id)}
 
@@ -631,7 +665,8 @@ async def hint(attempt_id: int, working: str):
         return
     db.update_attempt(attempt_id, hint_level=level)
     prepared = problem["hints"][level - 1] if len(problem["hints"]) >= level else ""
-    if not working.strip() and prepared:
+    if (not working.strip() and prepared and not leak.find(prepared, problem)
+            and not leak.ahead(prepared, problem["statement"], "")):
         # Nothing to tailor to: the prepared hint is instant.
         db.add_event(attempt_id, "hint", prepared, level=level)
         yield {"type": "done", "text": prepared, "state": attempt_state(attempt_id)}
@@ -647,7 +682,7 @@ async def hint(attempt_id: int, working: str):
         prepared=prepared or "(none)",
         working=_working(working),
     )
-    async for event in _respond(attempt_id, "hint", prompt, level=level):
+    async for event in _respond(attempt_id, "hint", prompt, problem=problem, attempt=attempt, level=level, working=working):
         yield event
 
 
@@ -668,7 +703,7 @@ async def analyse(attempt_id: int, working: str, answer: str):
         prompt = prompts.render("proof_review", statement=problem["statement"], solution=problem["solution"], working=_working(working + "\n" + answer))
         settings = db.get_settings()
         out: list[str] = []
-        async for event in _stream(settings["reasoning_model"], _messages(prompt), settings["think"], out):
+        async for event in _stream(settings["reasoning_model"], _messages(prompt), True, out):
             yield event
         text = out[0].strip()
         complete = bool(re.match(r"\W*verdict:\s*complete", text, re.I))
@@ -687,7 +722,8 @@ async def analyse(attempt_id: int, working: str, answer: str):
         final_answer=answer or "(none)",
         working=_working(working),
     )
-    async for event in _respond(attempt_id, "analysis", prompt):
+    # Thinking is always on here: without it, qwen3:14b blamed a correct step instead of the real mistake.
+    async for event in _respond(attempt_id, "analysis", prompt, problem=problem, attempt=attempt, think=True):
         yield event
 
 
@@ -701,7 +737,7 @@ async def explain(attempt_id: int, working: str, question: str):
         working=_working(working),
         question=question.strip() or "Why does the method for this problem work? What is the underlying idea?",
     )
-    async for event in _respond(attempt_id, "explain", prompt, meta={"question": question}):
+    async for event in _respond(attempt_id, "explain", prompt, problem=problem, attempt=attempt, meta={"question": question}):
         yield event
 
 

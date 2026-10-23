@@ -1,9 +1,12 @@
 import json
+import logging
 from collections.abc import AsyncIterator
 
 import httpx
 
 from .config import OLLAMA_URL
+
+log = logging.getLogger("themaths.ollama")
 
 NUM_CTX = 16384
 MAX_REPLY_TOKENS = 4096
@@ -51,6 +54,12 @@ async def chat(
                     chunk = json.loads(line)
                     if "error" in chunk:
                         raise OllamaError(chunk["error"])
+                    if chunk.get("done"):
+                        # Per-call timing, so a slow call can be diagnosed from the log.
+                        tokens, secs = chunk.get("eval_count", 0), chunk.get("eval_duration", 0) / 1e9
+                        log.warning("%s: %d tokens in %.0fs (%.1f/s), prompt %d tokens, total %.0fs, stop=%s",
+                                    model, tokens, secs, tokens / secs if secs else 0, chunk.get("prompt_eval_count", 0),
+                                    chunk.get("total_duration", 0) / 1e9, chunk.get("done_reason"))
                     msg = chunk.get("message") or {}
                     if msg.get("thinking"):
                         yield "thinking", msg["thinking"]
