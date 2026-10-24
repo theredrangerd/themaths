@@ -64,7 +64,7 @@ Two more choices settled by testing:
 
 ## Book reader
 
-A **Book tab** for working through a printed book chapter in the app. Chapter 7 of AoPS Intermediate Algebra (157 problems) is transcribed.
+A **Book tab** for working through a printed book chapter in the app. Chapter 7 of AoPS Intermediate Algebra (146 problems) is transcribed.
 
 ### What's built
 
