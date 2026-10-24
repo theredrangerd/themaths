@@ -626,7 +626,12 @@
     const { slug, chapter, data } = state.book;
     const ch = data.chapter;
     const book = (state.books || []).find((b) => b.slug === slug);
-    const heading = (s) => [s.number, s.title].filter((x) => x !== undefined && x !== null && x !== "").map(String).map(escapeHtml).join(" ");
+    const heading = (s) => {
+      const parts = [s.number, s.title].filter((x) => x !== undefined && x !== null && x !== "").map(String);
+      // Review and Challenge sections use one label for both fields; show it once.
+      if (parts.length === 2 && parts[0].trim() === parts[1].trim()) parts.pop();
+      return parts.map(escapeHtml).join(" ");
+    };
     $("book-aside").appendChild($("book-tutor"));
     $("book-text").innerHTML = `
       <p class="book-crumb"><a href="#/book">${escapeHtml(book ? book.title : slug)}</a></p>
