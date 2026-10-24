@@ -133,3 +133,13 @@ def test_solution_after_solving_keeps_unaided_and_images(client):
     assert f"img/sol.png?attempt={a}" in r.text
     assert client.get(CH).json()["statuses"]["1.1.5(a)"] == "unaided"
     assert client.get(f"{CH}/img/sol.png", params={"attempt": a}).status_code == 200
+
+
+def test_self_endpoint_conflict_on_non_self_or_finished(client):
+    a = open_(client, "1.1")
+    client.post(f"/api/attempts/{a}/solution")
+    assert client.post(f"/api/attempts/{a}/self", json={"got_it": True}).status_code == 409
+    b = open_(client, "1.1.2")
+    client.post(f"/api/attempts/{b}/solution")
+    assert client.post(f"/api/attempts/{b}/self", json={"got_it": True}).status_code == 200
+    assert client.post(f"/api/attempts/{b}/self", json={"got_it": False}).status_code == 409

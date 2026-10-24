@@ -235,3 +235,17 @@ def test_practice_solution_after_solving_still_counts_as_viewed(no_model):
     run(tutor.solution(a))
     attempt = tutor.attempt_state(a)["attempt"]
     assert attempt["solution_viewed"] == 1 and attempt["hint_level"] == 4 and attempt["outcome"] == "correct"
+
+
+def test_self_mark_only_on_open_self_problems(no_model):
+    a = open_("1.1")
+    run(tutor.solution(a))
+    with pytest.raises(ValueError):
+        tutor.self_mark(a, True)  # not a self problem
+    assert tutor.attempt_state(a)["attempt"]["outcome"] == "gave_up"
+    b = open_("1.1.2")
+    run(tutor.solution(b))
+    tutor.self_mark(b, False)
+    with pytest.raises(ValueError):
+        tutor.self_mark(b, True)  # already finished
+    assert tutor.attempt_state(b)["attempt"]["outcome"] == "gave_up"

@@ -619,7 +619,11 @@ def retry(attempt_id: int) -> dict:
 
 
 def self_mark(attempt_id: int, got_it: bool) -> dict:
-    attempt, _ = _load(attempt_id)
+    attempt, problem = _load(attempt_id)
+    if problem["answer_type"] != "self":
+        raise ValueError("Only self-marked problems are marked by you.")
+    if attempt["finished_at"]:
+        raise ValueError("This attempt is already finished.")
     if not attempt["solution_viewed"]:
         raise ValueError("Reveal the solution before marking yourself.")
     db.update_attempt(attempt_id, **_finish(attempt, "correct" if got_it else "gave_up"))
