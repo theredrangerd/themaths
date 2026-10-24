@@ -60,6 +60,27 @@ def test_sets_ignore_order():
     assert check("3", prob).result == "incorrect"
 
 
+def test_set_distinct_roots_match_truth_with_repeated_root():
+    prob = p("2, 3, -5, -5", "set")
+    assert check("2,3,-5", prob).result == "correct"
+    assert check("2,3,-5,-5", prob).result == "correct"
+    assert check("\\{2,3,-5\\}", prob).result == "correct"
+    assert agrees("2, 3, -5", prob)[0] is True
+
+
+def test_set_repeated_root_in_answer_matches_distinct_truth():
+    prob = p("2, 3, -5", "set")
+    assert check("2,3,-5,-5", prob).result == "correct"
+    assert agrees("2, 3, -5, -5", prob)[0] is True
+
+
+def test_set_missing_or_wrong_root_still_incorrect():
+    prob = p("2, 3, -5, -5", "set")
+    assert check("2,3", prob).result == "incorrect"
+    assert check("2,3,-5,7", prob).result == "incorrect"
+    assert agrees("2, 3", prob)[0] is False
+
+
 def test_intervals_respect_endpoints():
     prob = p("[0, 2)", "interval")
     assert check("[0,2)", prob).result == "correct"

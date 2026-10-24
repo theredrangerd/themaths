@@ -9,3 +9,4 @@ data/
 .playwright-mcp/
 .pytest_cache/
 .impeccable/
+/books/

@@ -195,19 +195,10 @@ def _strip_set_wrapper(s: str) -> str:
 
 
 def _set_equal(user: str, truth: str) -> bool:
+    """Compare as sets: order and repeated elements are ignored (equality via equal())."""
     u = [to_sympy(x) for x in _split_top_level(_strip_set_wrapper(user))]
     t = [to_sympy(x) for x in _split_top_level(_strip_set_wrapper(truth))]
-    if len(u) != len(t):
-        return False
-    remaining = list(t)
-    for x in u:
-        for i, y in enumerate(remaining):
-            if equal(x, y):
-                remaining.pop(i)
-                break
-        else:
-            return False
-    return True
+    return all(any(equal(x, y) for y in t) for x in u) and all(any(equal(y, x) for x in u) for y in t)
 
 
 _INTERVAL = re.compile(r"^\s*([\[(])\s*(.+?)\s*,\s*(.+?)\s*([\])])\s*$")
@@ -238,6 +229,8 @@ def check(user_answer: str, problem: dict) -> Verdict:
     """Mark a user's final answer against the stored answer for a problem."""
     kind = problem["answer_type"]
     truth = problem["answer"]
+    if kind == "self":
+        return Verdict("unverifiable", "This one is marked by you, against the solution.")
     if kind == "proof":
         return Verdict("unverifiable", "Proofs can't be machine-checked; the tutor will review your working.")
     if not normalise(user_answer):

@@ -16,7 +16,7 @@ import random
 import re
 import time
 
-from . import db, leak, ollama, prompts, sandbox, sections, taxonomy, verify
+from . import books, db, leak, ollama, prompts, sandbox, sections, taxonomy, verify
 from .config import DATA_DIR
 
 log = logging.getLogger("themaths.tutor")
@@ -71,7 +71,7 @@ def _public(attempt: dict, problem: dict) -> dict:
             k: problem[k]
             for k in (
                 "id", "statement", "choices", "track", "topic", "subtopic", "difficulty", "answer_type",
-                "verification_status", "verification_note", "source", "flagged",
+                "verification_status", "verification_note", "source", "flagged", "book_ref", "book_hints",
             )
         },
         "attempt": {
@@ -596,6 +596,65 @@ def _finish(attempt: dict, outcome: str) -> dict:
     return fields
 
 
+_IMG = re.compile(r"(/api/books/[a-z0-9-]+/[a-z0-9-]+/img/[\w-]+\.(?:png|jpg|svg))")
+
+
+def _ensure_book_problem(book: str, chapter: str, ref: str) -> int:
+    ch = books.load_chapter(book, chapter)
+    return db.upsert_book_problem(books.problem_row(ch, books.find_problem(ch, ref)))
+
+
+def _latest_or_new(problem_id: int) -> int:
+    return db.latest_attempt(problem_id) or db.start_attempt(problem_id)
+
+
+def open_book_problem(book: str, chapter: str, ref: str) -> dict:
+    """Upsert a book problem from its YAML, resume its latest attempt (or start one), return the state."""
+    return attempt_state(_latest_or_new(_ensure_book_problem(book, chapter, ref)))
+
+
+def retry(attempt_id: int) -> dict:
+    _, problem = _load(attempt_id)
+    return attempt_state(db.start_attempt(problem["id"]))
+
+
+def self_mark(attempt_id: int, got_it: bool) -> dict:
+    attempt, problem = _load(attempt_id)
+    if problem["answer_type"] != "self":
+        raise ValueError("Only self-marked problems are marked by you.")
+    if attempt["finished_at"]:
+        raise ValueError("This attempt is already finished.")
+    if not attempt["solution_viewed"]:
+        raise ValueError("Reveal the solution before marking yourself.")
+    db.update_attempt(attempt_id, **_finish(attempt, "correct" if got_it else "gave_up"))
+    return attempt_state(attempt_id)
+
+
+def _book_solution(attempt_id: int, problem: dict) -> str:
+    """A book problem's solution, with its images unlocked for this attempt."""
+    return _IMG.sub(rf"\1?attempt={attempt_id}", problem["solution"])
+
+
+def _mark_siblings_seen(book_ref: str) -> None:
+    """A solution shared with other parts shows them too: record it as seen on each.
+
+    A part already solved, or already shown the solution, is left alone. A self-marked
+    part stays open so the student can still say how they did; any other open part is
+    given up, as if its own solution had been shown.
+    """
+    for sib in books.siblings(book_ref):
+        book, chapter, ref = sib.split("/", 2)
+        attempt_id = _latest_or_new(_ensure_book_problem(book, chapter, ref))
+        attempt, problem = _load(attempt_id)
+        if attempt["outcome"] == "correct" or attempt["solution_viewed"]:
+            continue
+        fields = {"solution_viewed": 1, "hint_level": 4}
+        if problem["answer_type"] != "self" and attempt["outcome"] in (None, "incorrect"):
+            fields.update(_finish(attempt, "gave_up"))
+        db.update_attempt(attempt_id, **fields)
+        db.add_event(attempt_id, "solution", _book_solution(attempt_id, problem), level=4)
+
+
 def check_answer(attempt_id: int, answer: str, working: str) -> dict:
     attempt, problem = _load(attempt_id)
     verdict = verify.check(answer, problem)
@@ -612,11 +671,30 @@ def check_answer(attempt_id: int, answer: str, working: str) -> dict:
     return {"result": verdict.result, "note": verdict.note, "state": attempt_state(attempt_id)}
 
 
+# A "Hint N:" label, at the start of the reply, a line or a sentence.
+_HINT_LABEL = re.compile(r"(?:^|(?<=[.?!)]))\s*[*_#>\s-]*hint\s*[1-9]\b\W*?[:.)]", re.I | re.M)
+
+
+def _one_hint(text: str) -> str:
+    """Drop a leading "Hint N:" label, and cut the reply at any later hint the model added.
+
+    Asked for one hint, the model sometimes writes the next ones too ("Hint 2: ...",
+    "Hint 3: ..."), which would show the student later rungs early.
+    """
+    if m := _HINT_LABEL.match(text):
+        text = text[m.end():].lstrip("*_ \t\n")
+    if (m := _HINT_LABEL.search(text)) and m.start() > 0:
+        text = text[:m.start()]
+    return text.strip()
+
+
 async def _respond(attempt_id: int, kind: str, prompt: str, *, problem: dict, attempt: dict,
                    think: bool | None = None, level: int | None = None, meta: dict | None = None,
-                   working: str | None = None):
+                   working: str | None = None, known: str = ""):
     """Reply to the student. While the problem is unsolved, the reply is written hidden and
-    checked for the answer before it is shown: asked not to, small models state it anyway."""
+    checked for the answer before it is shown: asked not to, small models state it anyway.
+
+    known is what the student wrote (working, answer); values in it are not leaks."""
     settings = db.get_settings()
     model = settings["reasoning_model"]
     think = settings["think"] if think is None else think
@@ -624,22 +702,23 @@ async def _respond(attempt_id: int, kind: str, prompt: str, *, problem: dict, at
     out: list[str] = []
     async for event in _stream(model, _messages(prompt), think, out, show=not guard):
         yield event
-    text = out[0].strip()
-    if guard and (found := await asyncio.to_thread(leak.find, text, problem)):
+    # Every reply the model writes for a hint, rewrites included, is cut to one hint.
+    tidy = _one_hint if kind == "hint" else str.strip
+    text = tidy(out[0])
+    if guard and (found := await asyncio.to_thread(leak.find, text, problem, known)):
         log.warning("%s gave the answer away (%s); rewording", kind, found)
         yield {"type": "status", "text": "Rewording so it doesn't give the answer away"}
         out = []
         rewrite = prompts.render("unleak", text=text, leaks=", ".join(dict.fromkeys(found)))
         async for event in _stream(model, _messages(rewrite), False, out, show=False):
             yield event
-        rewritten = out[0].strip() or text
-        if still := await asyncio.to_thread(leak.find, rewritten, problem):
+        rewritten = tidy(out[0]) or text
+        if still := await asyncio.to_thread(leak.find, rewritten, problem, known):
             log.warning("%s still gave the answer away (%s); hiding it", kind, still)
             rewritten = leak.redact(rewritten, still)
         text = rewritten
     if guard and working is not None:
         # Hints: no values from steps the student hasn't done yet.
-        text = re.sub(r"^\s*\**hint\s*\d\**\s*[:.]\s*", "", text, flags=re.I)
         if early := leak.ahead(text, problem["statement"], working):
             log.warning("%s jumped ahead of the student (%s); rewording", kind, early)
             yield {"type": "status", "text": "Making sure the hint doesn't do the step for you"}
@@ -648,11 +727,23 @@ async def _respond(attempt_id: int, kind: str, prompt: str, *, problem: dict, at
                                     working=_working(working), text=text)
             async for event in _stream(model, _messages(rehint), False, out, show=False):
                 yield event
-            rewritten = out[0].strip()
-            if rewritten and not leak.find(rewritten, problem):
+            rewritten = tidy(out[0])
+            if rewritten and not leak.find(rewritten, problem, known):
                 text = rewritten
     db.add_event(attempt_id, kind, text, level=level, meta=meta)
     yield {"type": "done", "text": text, "state": attempt_state(attempt_id)}
+
+
+# Only the current level's rule goes into the prompt: shown all three, the model wrote all three.
+_HINT_RULES = {
+    1: "A nudge: one or two sentences, as a question or an observation that redirects attention "
+       '("What do you notice about ...?"). No formulas, no method names.',
+    2: "The tool: name the technique, theorem or property that unlocks the next part, and say in one "
+       "sentence why it fits. No algebra.",
+    3: "The next step: say what to do next as one instruction. You may write at most one short "
+       "expression, and only one built from things already in the problem or the student's working. "
+       "Do not carry the step out or show its result.",
+}
 
 
 async def hint(attempt_id: int, working: str):
@@ -664,6 +755,12 @@ async def hint(attempt_id: int, working: str):
             yield event
         return
     db.update_attempt(attempt_id, hint_level=level)
+    if level <= (problem.get("book_hints") or 0):
+        # The book's own hint: served verbatim, with no model call and no leak checks.
+        text = problem["hints"][level - 1]
+        db.add_event(attempt_id, "hint", text, level=level, meta={"book": True})
+        yield {"type": "done", "text": text, "state": attempt_state(attempt_id)}
+        return
     prepared = problem["hints"][level - 1] if len(problem["hints"]) >= level else ""
     if (not working.strip() and prepared and not leak.find(prepared, problem)
             and not leak.ahead(prepared, problem["statement"], "")):
@@ -674,7 +771,7 @@ async def hint(attempt_id: int, working: str):
     previous = [e["content"] for e in db.get_events(attempt_id) if e["kind"] == "hint"]
     prompt = prompts.render(
         "hint",
-        level=str(level),
+        level_rule=_HINT_RULES[level],
         statement=problem["statement"],
         solution=problem["solution"],
         answer=problem["answer"],
@@ -682,18 +779,30 @@ async def hint(attempt_id: int, working: str):
         prepared=prepared or "(none)",
         working=_working(working),
     )
-    async for event in _respond(attempt_id, "hint", prompt, problem=problem, attempt=attempt, level=level, working=working):
+    async for event in _respond(attempt_id, "hint", prompt, problem=problem, attempt=attempt, level=level,
+                               working=working, known=working):
         yield event
 
 
 async def solution(attempt_id: int):
     attempt, problem = _load(attempt_id)
     fields = {"hint_level": 4, "solution_viewed": 1}
-    if attempt["outcome"] in (None, "incorrect"):
+    text = problem["solution"]
+    if problem["source"] == "book":
+        text = _book_solution(attempt_id, problem)
+        if attempt["outcome"] == "correct":
+            # Solving it unlocked the solution: reading it afterwards costs nothing.
+            fields = {}
+        elif problem["answer_type"] != "self":
+            # A self-marked problem stays open until the student says how they did.
+            if attempt["outcome"] in (None, "incorrect"):
+                fields.update(_finish(attempt, "gave_up"))
+        _mark_siblings_seen(problem["book_ref"])
+    elif attempt["outcome"] in (None, "incorrect"):
         fields.update(_finish(attempt, "gave_up"))
     db.update_attempt(attempt_id, **fields)
-    db.add_event(attempt_id, "solution", problem["solution"], level=4)
-    yield {"type": "done", "text": problem["solution"], "state": attempt_state(attempt_id)}
+    db.add_event(attempt_id, "solution", text, level=4)
+    yield {"type": "done", "text": text, "state": attempt_state(attempt_id)}
 
 
 async def analyse(attempt_id: int, working: str, answer: str):
@@ -723,7 +832,8 @@ async def analyse(attempt_id: int, working: str, answer: str):
         working=_working(working),
     )
     # Thinking is always on here: without it, qwen3:14b blamed a correct step instead of the real mistake.
-    async for event in _respond(attempt_id, "analysis", prompt, problem=problem, attempt=attempt, think=True):
+    async for event in _respond(attempt_id, "analysis", prompt, problem=problem, attempt=attempt, think=True,
+                               known=working + "\n" + answer):
         yield event
 
 
@@ -737,7 +847,8 @@ async def explain(attempt_id: int, working: str, question: str):
         working=_working(working),
         question=question.strip() or "Why does the method for this problem work? What is the underlying idea?",
     )
-    async for event in _respond(attempt_id, "explain", prompt, problem=problem, attempt=attempt, meta={"question": question}):
+    async for event in _respond(attempt_id, "explain", prompt, problem=problem, attempt=attempt, meta={"question": question},
+                               known=working):
         yield event
 
 

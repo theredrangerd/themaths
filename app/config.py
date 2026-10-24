@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("THEMATHS_DATA", ROOT / "data"))
 DB_PATH = DATA_DIR / "themaths.db"
+BOOKS_DIR = Path(os.environ.get("THEMATHS_BOOKS", ROOT / "books"))
 PROMPTS_DIR = ROOT / "prompts"
 STATIC_DIR = ROOT / "static"
 TAXONOMY_PATH = ROOT / "taxonomy.yaml"
