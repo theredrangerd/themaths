@@ -81,6 +81,30 @@ blocks:
       answer: "9"
       tutor_hints:
         - "Tutor hint epsilon."
+  - problem:
+      ref: "1.1.5(a)"
+      kind: exercise
+      preamble: |
+        A sprocket polynomial $s(x)$ has three roots.
+      statement: |
+        Find the roots of $s(x)$.
+      solution: |
+        Both parts at once: ![](img/sol.png) and the secret-solution-six.
+      answer_type: set
+      answer: "-5/2, 1/3, 2"
+      covers: ["1.1.5(a)", "1.1.5(b)"]
+  - problem:
+      ref: "1.1.5(b)"
+      kind: exercise
+      preamble: |
+        A sprocket polynomial $s(x)$ has three roots.
+      statement: |
+        Explain why the roots fit together.
+      solution: |
+        Both parts at once: ![](img/sol.png) and the secret-solution-six.
+      answer_type: self
+      answer: ""
+      covers: ["1.1.5(a)", "1.1.5(b)"]
   - prose: |
       A closing figure: ![](img/fig.png) end.
   - box: concept

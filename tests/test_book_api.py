@@ -97,7 +97,7 @@ def test_statuses_and_summary(client):
     assert r["statuses"]["1.1"] == "unaided"
     assert r["summary"]["solved"] == 1
     assert r["summary"]["unaided"] == 1
-    assert r["summary"]["total"] == 6
+    assert r["summary"]["total"] == 8
     assert r["summary"]["seen"] == 0
 
 

@@ -162,3 +162,22 @@ def test_hint_prompt_shows_only_this_level(model_says):
     assert "Hint 1, a nudge" not in prompt and "Hint 2, the tool" not in prompt
     assert "The next step: say what to do next" in prompt
     assert "Write only this one hint, with no label and no further hints." in prompt
+
+
+def test_set_root_in_hint_is_rewritten(model_says):
+    reply, calls = model_says
+    reply[0] = "Check whether -5/2 is a root."
+    a = open_("1.1.5(a)")
+    events = run(tutor.hint(a, "I have no roots yet"))
+    assert len(calls) == 2  # the reply, then the rewrite
+    assert "-5/2" not in events[-1]["text"]
+
+
+def test_values_the_student_wrote_are_not_leaks_in_replies(model_says):
+    reply, calls = model_says
+    reply[0] = "Your root -5/2 is right; now divide."
+    a = open_("1.1.5(a)")
+    assert run(tutor.hint(a, "x = -5/2 works"))[-1]["text"] == reply[0]
+    assert run(tutor.explain(a, "x = -5/2 works", ""))[-1]["text"] == reply[0]
+    assert run(tutor.analyse(a, "", "-5/2, 1, 2"))[-1]["text"] == reply[0]
+    assert len(calls) == 3  # no rewrites

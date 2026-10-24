@@ -52,3 +52,45 @@ def test_hints_that_jump_ahead_are_caught():
     assert leak.ahead("Solve $y - x = a$, $y + x = b$ for all factor pairs $(a, b)$ of 35.", statement, working) == ["35"]
     assert leak.ahead("What do you notice about $4n^2 - 76n + 396 = 4k^2$?", statement, working) == []
     assert leak.ahead("Try multiplying both sides by 4 and completing the square.", statement, "") == []
+
+
+# Set answers (invented values).
+ROOTS = {"answer": "-5/2, 1/3, 2", "answer_type": "set", "choices": []}
+SMALL = {"answer": "{1, 2, 3}", "answer_type": "set", "choices": []}
+
+
+def test_set_answer_fraction_root_is_caught():
+    assert leak.find("One root is $-\\frac{5}{2}$, so try dividing.", ROOTS)
+    assert leak.find("One root is -5/2, so try dividing.", ROOTS)
+    assert leak.find("Check $x = \\frac{1}{3}$ in the cubic.", ROOTS)
+
+
+def test_plain_fraction_is_one_value():
+    prob = {"answer": "-5/2", "answer_type": "exact_expression", "choices": []}
+    assert leak.find("so x = -5/2 works", prob)
+    # Its parts are not the answer: 5/2 is not -5.
+    assert leak.find("so x = 5/2 works", {"answer": "-5", "answer_type": "integer", "choices": []}) == []
+
+
+def test_small_integer_roots_are_not_guarded_one_by_one():
+    assert leak.find("The polynomial has degree 3, so it has 3 roots.", SMALL) == []
+    assert leak.find("Try $x = 2$ in the polynomial.", SMALL) == []
+
+
+def test_naming_every_root_is_a_leak():
+    assert leak.find("The roots are 1, 2 and 3.", SMALL)
+    assert leak.find("So $x = 1$, $x = 2$ or $x = 3$.", SMALL)
+
+
+def test_values_the_student_wrote_are_not_leaks():
+    assert leak.find("Your root -5/2 is right; now divide.", ROOTS, known="x = -5/2 works") == []
+    assert leak.find("You have 1 and 2; the last root is 3.", SMALL, known="roots 1, 2, 3") == []
+    # One new root completes the set: still a leak.
+    assert leak.find("You have 1 and 2; the last root is 3.", SMALL, known="I found 1 and 2")
+    assert leak.find("instead of the correct 9.", PAIRS, known="")
+
+
+def test_set_elements_with_symbols_are_ignored():
+    prob = {"answer": "a, 2/7", "answer_type": "set", "choices": []}
+    assert leak.find("one root is 2/7", prob)
+    assert leak.find("the letter a appears", prob) == []

@@ -673,9 +673,11 @@ def _one_hint(text: str) -> str:
 
 async def _respond(attempt_id: int, kind: str, prompt: str, *, problem: dict, attempt: dict,
                    think: bool | None = None, level: int | None = None, meta: dict | None = None,
-                   working: str | None = None):
+                   working: str | None = None, known: str = ""):
     """Reply to the student. While the problem is unsolved, the reply is written hidden and
-    checked for the answer before it is shown: asked not to, small models state it anyway."""
+    checked for the answer before it is shown: asked not to, small models state it anyway.
+
+    known is what the student wrote (working, answer); values in it are not leaks."""
     settings = db.get_settings()
     model = settings["reasoning_model"]
     think = settings["think"] if think is None else think
@@ -686,7 +688,7 @@ async def _respond(attempt_id: int, kind: str, prompt: str, *, problem: dict, at
     text = out[0].strip()
     if kind == "hint":
         text = _one_hint(text)
-    if guard and (found := await asyncio.to_thread(leak.find, text, problem)):
+    if guard and (found := await asyncio.to_thread(leak.find, text, problem, known)):
         log.warning("%s gave the answer away (%s); rewording", kind, found)
         yield {"type": "status", "text": "Rewording so it doesn't give the answer away"}
         out = []
@@ -694,7 +696,7 @@ async def _respond(attempt_id: int, kind: str, prompt: str, *, problem: dict, at
         async for event in _stream(model, _messages(rewrite), False, out, show=False):
             yield event
         rewritten = out[0].strip() or text
-        if still := await asyncio.to_thread(leak.find, rewritten, problem):
+        if still := await asyncio.to_thread(leak.find, rewritten, problem, known):
             log.warning("%s still gave the answer away (%s); hiding it", kind, still)
             rewritten = leak.redact(rewritten, still)
         text = rewritten
@@ -709,7 +711,7 @@ async def _respond(attempt_id: int, kind: str, prompt: str, *, problem: dict, at
             async for event in _stream(model, _messages(rehint), False, out, show=False):
                 yield event
             rewritten = out[0].strip()
-            if rewritten and not leak.find(rewritten, problem):
+            if rewritten and not leak.find(rewritten, problem, known):
                 text = rewritten
     db.add_event(attempt_id, kind, text, level=level, meta=meta)
     yield {"type": "done", "text": text, "state": attempt_state(attempt_id)}
@@ -760,7 +762,8 @@ async def hint(attempt_id: int, working: str):
         prepared=prepared or "(none)",
         working=_working(working),
     )
-    async for event in _respond(attempt_id, "hint", prompt, problem=problem, attempt=attempt, level=level, working=working):
+    async for event in _respond(attempt_id, "hint", prompt, problem=problem, attempt=attempt, level=level,
+                               working=working, known=working):
         yield event
 
 
@@ -809,7 +812,8 @@ async def analyse(attempt_id: int, working: str, answer: str):
         working=_working(working),
     )
     # Thinking is always on here: without it, qwen3:14b blamed a correct step instead of the real mistake.
-    async for event in _respond(attempt_id, "analysis", prompt, problem=problem, attempt=attempt, think=True):
+    async for event in _respond(attempt_id, "analysis", prompt, problem=problem, attempt=attempt, think=True,
+                               known=working + "\n" + answer):
         yield event
 
 
@@ -823,7 +827,8 @@ async def explain(attempt_id: int, working: str, question: str):
         working=_working(working),
         question=question.strip() or "Why does the method for this problem work? What is the underlying idea?",
     )
-    async for event in _respond(attempt_id, "explain", prompt, problem=problem, attempt=attempt, meta={"question": question}):
+    async for event in _respond(attempt_id, "explain", prompt, problem=problem, attempt=attempt, meta={"question": question},
+                               known=working):
         yield event
 
 
