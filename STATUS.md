@@ -39,7 +39,8 @@ These are never discarded.
 
 Models that know the answer state it, even when told not to (for example, "8 instead of the correct 9"). `app/leak.py` handles this in code. While a problem is unsolved:
 
-- **Hints, error analysis and "Why?" are written hidden**, then checked for the answer's value in the tutor's own words. Text quoted from the student is ignored. If the answer appears, the model rewrites the reply; if it still appears, the value is replaced with "[hidden]".
+- **Hints, error analysis and "Why?" are written hidden**, then checked for the answer's value in the tutor's own words. Text quoted from the student is ignored. If the answer appears, the model rewrites the reply; if it still appears, the value is replaced with "[hidden]". Values the student has written themselves (their working, and for error analysis their answer) never count. A plain fraction like -5/2 is read as one value.
+- **Set answers** (such as a polynomial's roots) guard each element that is not an integer from −10 to 10. Small integers are not guarded one by one ("degree 3" and "2 roots" are ordinary phrasing); naming every element of the set counts as a leak. Interval answers are not guarded.
 - **Hints are also checked for values the student hasn't reached** (`leak.ahead`), such as "factor pairs of 35" before the student has got to 35. Small integers 0–10 are allowed. If found, the hint is rewritten.
 
 Two more choices settled by testing:
@@ -70,18 +71,20 @@ A **Book tab** for working through a printed book chapter in the app. Chapter 7 
 - **Book tab:** a book, then a chapter, then its sections, with the book's text and figures verbatim.
 - **Hidden in-text solutions:** solutions, answers and hints never reach the browser until the student asks. Solution-only images are 404 until an attempt has seen the solution or solved the problem.
 - **Book hints first:** a problem's own hints are served instantly and verbatim; the tutor's rungs follow them. The ladder holds 3 hints.
-- **Self and proof problems:** `self` problems show the solution and the student marks "got it"; `proof` problems go to proof review.
+- **Self and proof problems:** `self` problems show the solution and the student marks "got it"; `proof` problems go to proof review. Only an open `self` attempt can be self-marked.
+- **Shared solutions:** when parts share one solution (`covers`), showing it on one part records it on the others too, with the solution added to each part's attempt. A part already solved is left alone. A `self` part stays open, so the student can still mark it. Any other open part is given up, which adds a gave_up attempt to Progress for each such part.
+- **Reading after solving:** once a book problem is solved, reading its solution costs nothing: an unaided solve stays unaided.
 - **Progress tagging:** attempts carry the chapter's tags (AMC / Algebra / Polynomials).
 
 ### Adding a chapter
 
-Content lives in the git-ignored `books/<book>/<chapter>/`: `chapter.yaml` (number, title, tags, section files), one YAML per section (ordered `prose`, `box` and `problem` blocks), and `img/`. Each problem has `ref`, `kind`, `statement`, `hints`, `solution`, `solution_by`, `answer_type`, `answer`, `tutor_hints`. The format is described in the plan under `docs/`. Transcribe online with Claude, verbatim, then check with `tests/test_book_content.py`. No book text or images are ever committed.
+Content lives in the git-ignored `books/<book>/<chapter>/`: `chapter.yaml` (number, title, tags, section files), one YAML per section (ordered `prose`, `box` and `problem` blocks), and `img/`. Each problem has `ref`, `kind`, `statement`, `hints`, `solution`, `solution_by`, `answer_type`, `answer`, `tutor_hints`. The format is described in `docs/superpowers/plans/2026-10-23-book-reader.md`. Transcribe online with Claude, verbatim, then check with `tests/test_book_content.py`. No book text or images are ever committed.
 
-Transcription flags raised from the app are in `db.book_reports()`.
+Transcription flags raised from the app are in `db.book_reports()`. There is no page for them yet; list them with `.venv/bin/python -c "from app import db; print(db.book_reports())"`.
 
 ### Live check (qwen3:14b, throwaway DB, 2026-10-24)
 
-Every call returned. No answer was leaked. One leak-guard rewrite fired.
+Every call returned. No full stored answer was stated, but there were partial leaks: the root −5/2 on 7.12(f) (set answers were unguarded then; they are now guarded), "two crossings near x = 1" on 7.47, and the count 6 on 7.51. The last two are error-analysis model quality, which the guard doesn't cover. One leak-guard rewrite fired.
 
 | Problem | Call | Time | Leak | Rewrite | Quality |
 |---|---|---|---|---|---|
@@ -110,7 +113,7 @@ Every call returned. No answer was leaked. One leak-guard rewrite fired.
 
 Also: answer `2, 3, -5` for 7.2.1(b) is marked correct, because sets ignore repeated roots (a deliberate choice, see above).
 
-Problems seen: when a hint call returns several hints at once ("Hint 2: ...", "Hint 3: ..." appended), the student sees later rungs early (3 of 12 tutor hints). Error analysis sometimes names a step value or the key idea. Proof review can raise a pedantic gap in a correct proof.
+Problems seen: a hint call sometimes returned several hints at once ("Hint 2: ...", "Hint 3: ..." appended), so the student saw later rungs early (3 of 11 tutor hints). Fixed since: the hint prompt now shows the model only the current level's rule and asks for one hint with no label, and the reply is cut at any later "Hint N:" label. Not yet retested live. Error analysis sometimes names a step value or the key idea. Proof review can raise a pedantic gap in a correct proof.
 
 ### Known limitations
 
