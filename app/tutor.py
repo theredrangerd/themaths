@@ -702,9 +702,9 @@ async def _respond(attempt_id: int, kind: str, prompt: str, *, problem: dict, at
     out: list[str] = []
     async for event in _stream(model, _messages(prompt), think, out, show=not guard):
         yield event
-    text = out[0].strip()
-    if kind == "hint":
-        text = _one_hint(text)
+    # Every reply the model writes for a hint, rewrites included, is cut to one hint.
+    tidy = _one_hint if kind == "hint" else str.strip
+    text = tidy(out[0])
     if guard and (found := await asyncio.to_thread(leak.find, text, problem, known)):
         log.warning("%s gave the answer away (%s); rewording", kind, found)
         yield {"type": "status", "text": "Rewording so it doesn't give the answer away"}
@@ -712,7 +712,7 @@ async def _respond(attempt_id: int, kind: str, prompt: str, *, problem: dict, at
         rewrite = prompts.render("unleak", text=text, leaks=", ".join(dict.fromkeys(found)))
         async for event in _stream(model, _messages(rewrite), False, out, show=False):
             yield event
-        rewritten = out[0].strip() or text
+        rewritten = tidy(out[0]) or text
         if still := await asyncio.to_thread(leak.find, rewritten, problem, known):
             log.warning("%s still gave the answer away (%s); hiding it", kind, still)
             rewritten = leak.redact(rewritten, still)
@@ -727,7 +727,7 @@ async def _respond(attempt_id: int, kind: str, prompt: str, *, problem: dict, at
                                     working=_working(working), text=text)
             async for event in _stream(model, _messages(rehint), False, out, show=False):
                 yield event
-            rewritten = out[0].strip()
+            rewritten = tidy(out[0])
             if rewritten and not leak.find(rewritten, problem, known):
                 text = rewritten
     db.add_event(attempt_id, kind, text, level=level, meta=meta)

@@ -111,14 +111,15 @@ def test_self_unverifiable_and_no_secrets():
 
 @pytest.fixture
 def model_says(book_env, monkeypatch):
-    """Stub the model; set reply[0] to what it says. Records the prompts it was sent."""
+    """Stub the model; set reply[0] to what it says (with more items, each call takes the next).
+    Records the prompts it was sent."""
     db.init()
     reply = ["MODEL REPLY"]
     calls = []
 
     async def stub(model, messages, think, out, show=True, **kw):
         calls.append(messages)
-        out.append(reply[0])
+        out.append(reply.pop(0) if len(reply) > 1 else reply[0])
         return
         yield
 
@@ -249,3 +250,10 @@ def test_self_mark_only_on_open_self_problems(no_model):
     with pytest.raises(ValueError):
         tutor.self_mark(b, True)  # already finished
     assert tutor.attempt_state(b)["attempt"]["outcome"] == "gave_up"
+
+
+def test_rewritten_hint_keeps_only_the_first_hint(model_says):
+    reply, calls = model_says
+    reply[:] = ["Check whether -5/2 is a root.", "Hint 1: Test the candidates.\nHint 2: Divide."]
+    a = open_("1.1.5(a)")
+    assert run(tutor.hint(a, "I have no roots yet"))[-1]["text"] == "Test the candidates."

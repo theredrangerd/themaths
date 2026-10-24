@@ -318,16 +318,17 @@
     const book = isBook(state.current);
     const self = book && state.current.problem.answer_type === "self";
     const a = has ? state.current.attempt : {};
+    // A solved book problem can read its solution without losing credit, so look for the event too.
+    const shown = !!a.solution_viewed || (has && state.current.events.some((e) => e.kind === "solution"));
     $("act-another").hidden = book;
     $("act-check").hidden = self && !!a.solution_viewed;
     $("act-got").hidden = $("act-missed").hidden = !(self && a.solution_viewed && !a.finished_at);
     $("act-retry").hidden = !(book && a.finished_at);
-    if (book && a.solution_viewed) $("act-hint").disabled = true;
+    if (book && shown) $("act-hint").disabled = true;
     $("ask-submit").disabled = busy;
     $("screenshot-btn").disabled = busy;
     if (has && state.current.problem.flagged) $("act-flag").disabled = true;
-    // A solved book problem can read its solution without losing credit, so look for the event too.
-    if (has && (a.solution_viewed || (state.current.events || []).some((e) => e.kind === "solution"))) $("act-solution").disabled = true;
+    if (shown) $("act-solution").disabled = true;
     if (!state.confirmSolution) $("act-solution").textContent = "Show solution";
   }
 
