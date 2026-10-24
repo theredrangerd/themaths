@@ -212,3 +212,26 @@ def test_shared_reveal_from_self_part_gives_up_open_sibling(no_model):
     assert state["attempt"]["outcome"] == "gave_up" and state["attempt"]["finished_at"]
     assert [e["kind"] for e in state["events"]] == ["solution"]
     assert db.book_statuses("demo/01/")["demo/01/1.1.5(a)"] == "seen"
+
+
+def test_reading_solution_after_solving_keeps_credit(no_model):
+    a = open_("1.1")
+    tutor.check_answer(a, "7", "")
+    events = run(tutor.solution(a))
+    assert "secret-solution-one" in events[-1]["text"]
+    state = tutor.attempt_state(a)
+    assert state["attempt"]["hint_level"] == 0 and state["attempt"]["solution_viewed"] == 0
+    assert state["attempt"]["outcome"] == "correct"
+    assert state["events"][-1]["kind"] == "solution"
+    assert db.book_statuses("demo/01/")["demo/01/1.1"] == "unaided"
+
+
+def test_practice_solution_after_solving_still_counts_as_viewed(no_model):
+    pid = db.insert_problem({"source": "generated", "statement": "s", "track": "AMC", "topic": "Algebra",
+                             "answer_type": "integer", "answer": "1", "verification_status": "verified",
+                             "solution": "x"})
+    a = db.start_attempt(pid)
+    tutor.check_answer(a, "1", "")
+    run(tutor.solution(a))
+    attempt = tutor.attempt_state(a)["attempt"]
+    assert attempt["solution_viewed"] == 1 and attempt["hint_level"] == 4 and attempt["outcome"] == "correct"

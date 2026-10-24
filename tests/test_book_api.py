@@ -122,3 +122,14 @@ def test_shared_reveal_unlocks_sibling_images(client):
     b = open_(client, "1.1.5(b)")
     assert client.get(f"{CH}/img/sol.png", params={"attempt": b}).status_code == 200
     assert client.post(f"/api/attempts/{b}/self", json={"got_it": False}).status_code == 200
+
+
+def test_solution_after_solving_keeps_unaided_and_images(client):
+    a = open_(client, "1.1.5(a)")
+    assert client.post(f"/api/attempts/{a}/check", json={"answer": "2, 1/3, -5/2"}).json()["result"] == "correct"
+    assert client.get(CH).json()["statuses"]["1.1.5(a)"] == "unaided"
+    r = client.post(f"/api/attempts/{a}/solution")
+    assert r.status_code == 200
+    assert f"img/sol.png?attempt={a}" in r.text
+    assert client.get(CH).json()["statuses"]["1.1.5(a)"] == "unaided"
+    assert client.get(f"{CH}/img/sol.png", params={"attempt": a}).status_code == 200

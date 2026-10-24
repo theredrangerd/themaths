@@ -786,7 +786,10 @@ async def solution(attempt_id: int):
     text = problem["solution"]
     if problem["source"] == "book":
         text = _book_solution(attempt_id, problem)
-        if problem["answer_type"] != "self":
+        if attempt["outcome"] == "correct":
+            # Solving it unlocked the solution: reading it afterwards costs nothing.
+            fields = {}
+        elif problem["answer_type"] != "self":
             # A self-marked problem stays open until the student says how they did.
             if attempt["outcome"] in (None, "incorrect"):
                 fields.update(_finish(attempt, "gave_up"))

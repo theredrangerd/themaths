@@ -326,7 +326,8 @@
     $("ask-submit").disabled = busy;
     $("screenshot-btn").disabled = busy;
     if (has && state.current.problem.flagged) $("act-flag").disabled = true;
-    if (has && state.current.attempt.solution_viewed) $("act-solution").disabled = true;
+    // A solved book problem can read its solution without losing credit, so look for the event too.
+    if (has && (a.solution_viewed || (state.current.events || []).some((e) => e.kind === "solution"))) $("act-solution").disabled = true;
     if (!state.confirmSolution) $("act-solution").textContent = "Show solution";
   }
 
