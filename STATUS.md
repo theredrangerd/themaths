@@ -61,6 +61,64 @@ Two more choices settled by testing:
 | Proof review | Accepts a valid proof and catches a flawed one; 60–145 s |
 | Hints | Being fixed: they jumped ahead and did steps for the student. Prompt tightened and `leak.ahead` added; retest in progress |
 
+## Book reader
+
+A **Book tab** for working through a printed book chapter in the app. Chapter 7 of AoPS Intermediate Algebra (157 problems) is transcribed.
+
+### What's built
+
+- **Book tab:** a book, then a chapter, then its sections, with the book's text and figures verbatim.
+- **Hidden in-text solutions:** solutions, answers and hints never reach the browser until the student asks. Solution-only images are 404 until an attempt has seen the solution or solved the problem.
+- **Book hints first:** a problem's own hints are served instantly and verbatim; the tutor's rungs follow them. The ladder holds 3 hints.
+- **Self and proof problems:** `self` problems show the solution and the student marks "got it"; `proof` problems go to proof review.
+- **Progress tagging:** attempts carry the chapter's tags (AMC / Algebra / Polynomials).
+
+### Adding a chapter
+
+Content lives in the git-ignored `books/<book>/<chapter>/`: `chapter.yaml` (number, title, tags, section files), one YAML per section (ordered `prose`, `box` and `problem` blocks), and `img/`. Each problem has `ref`, `kind`, `statement`, `hints`, `solution`, `solution_by`, `answer_type`, `answer`, `tutor_hints`. The format is described in the plan under `docs/`. Transcribe online with Claude, verbatim, then check with `tests/test_book_content.py`. No book text or images are ever committed.
+
+Transcription flags raised from the app are in `db.book_reports()`.
+
+### Live check (qwen3:14b, throwaway DB, 2026-10-24)
+
+Every call returned. No answer was leaked. One leak-guard rewrite fired.
+
+| Problem | Call | Time | Leak | Rewrite | Quality |
+|---|---|---|---|---|---|
+| 7.12(f) intext | hint 1 (typed working) | 15 s | no | no | good Socratic nudge |
+| | hint 2 | 13 s | no | no | fine, generic |
+| | hint 3 | 14 s | no | no | fine; repeats student's own root |
+| | wrong answer, error analysis | 52 s | one root (-5/2) named | no | found the sign slip correctly |
+| | Why? | 42 s | no | no | accurate |
+| 7.2.1(b) exercise | hint 1 | 5 s | no | no | good |
+| | hint 2 | 7 s | no | no | bad: also printed "Hint 2:" and "Hint 3:" lines |
+| | hint 3 | 6 s | no | no | good |
+| | error analysis (answer `2, 3, 5`) | 49 s | no | no | found 5 vs -5 but muddled |
+| | Why? | 38 s | no | no | accurate |
+| 7.47 challenge | hint 1 | 7 s | no | no | good |
+| | hint 2 | 9 s | no | no | generic |
+| | hint 3 | 12 s | no | no | bad: "Hint 2:/Hint 3:" lines again |
+| | error analysis (answer `3`) | 52 s | no (4 not stated) | no | right idea, but gives away "two crossings near x = 1" |
+| | Why? | 46 s | no | no | accurate, hints at the same crux |
+| 7.51 challenge | hint 1 | 0 s | no | no | the book's hint, verbatim |
+| | hint 2 | 11 s | no | no | generic |
+| | hint 3 | 13 s | no | no | bad: "Hint 2:/Hint 3:" lines again |
+| | error analysis (answer `80`) | 91 s | no (96 not stated) | yes, "Rewording so it doesn't give the answer away" | found the miscount, but states the right count of 6 |
+| | Why? | 44 s | no | no | accurate |
+| 7.21 self | solution, then "got it" | instant | n/a | n/a | marked correct |
+| 7.20 proof | proof review (valid proof) | 57 s | n/a | n/a | poor: called a valid proof incomplete |
+
+Also: answer `2, 3, -5` for 7.2.1(b) is marked correct, because sets ignore repeated roots (a deliberate choice, see above).
+
+Problems seen: when a hint call returns several hints at once ("Hint 2: ...", "Hint 3: ..." appended), the student sees later rungs early (3 of 12 tutor hints). Error analysis sometimes names a step value or the key idea. Proof review can raise a pedantic gap in a correct proof.
+
+### Known limitations
+
+- Some answers are self-marked because the verifier has no ordered-tuple type: 7.39, 7.48, 7.58, 7.6.4.
+- 7.44 marks a scaled-but-equivalent equation as wrong.
+- A book's 4th and later hints are not shown (the ladder holds 3).
+- 7.38(c)'s solution is written by the tutor (the source had none) and is labelled so.
+
 ## Not yet done
 
 - [ ] Finish the hint retest (fresh import with the new hint rules).

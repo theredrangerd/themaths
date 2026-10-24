@@ -24,6 +24,7 @@ KaTeX, marked and DOMPurify are vendored in `static/vendor/`, so nothing is fetc
 This starts the server on `http://127.0.0.1:8737` and opens it in your browser. Ollama must be running.
 
 - **Practice:** ask for a problem in your own words, or set track, topic and difficulty. Paste or drop a screenshot of a printed problem to practise that instead.
+- **Book:** read a transcribed book chapter in the Book tab and work its problems with the same hints, checking and "Why?" (book hints come first).
 - **Your working:** type where you've got to (LaTeX or plain text). Hints are tailored to it.
 - **Check answer:** marked by SymPy against the stored answer. If you're wrong, the tutor points to where your working went wrong without giving the answer.
 - **Hint:** nudge, then tool, then next step, then the full solution.
