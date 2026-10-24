@@ -654,6 +654,23 @@ def check_answer(attempt_id: int, answer: str, working: str) -> dict:
     return {"result": verdict.result, "note": verdict.note, "state": attempt_state(attempt_id)}
 
 
+# A "Hint N:" label, at the start of the reply, a line or a sentence.
+_HINT_LABEL = re.compile(r"(?:^|(?<=[.?!)]))\s*[*_#>\s-]*hint\s*[1-9]\b\W*?[:.)]", re.I | re.M)
+
+
+def _one_hint(text: str) -> str:
+    """Drop a leading "Hint N:" label, and cut the reply at any later hint the model added.
+
+    Asked for one hint, the model sometimes writes the next ones too ("Hint 2: ...",
+    "Hint 3: ..."), which would show the student later rungs early.
+    """
+    if m := _HINT_LABEL.match(text):
+        text = text[m.end():].lstrip("*_ \t\n")
+    if (m := _HINT_LABEL.search(text)) and m.start() > 0:
+        text = text[:m.start()]
+    return text.strip()
+
+
 async def _respond(attempt_id: int, kind: str, prompt: str, *, problem: dict, attempt: dict,
                    think: bool | None = None, level: int | None = None, meta: dict | None = None,
                    working: str | None = None):
@@ -667,6 +684,8 @@ async def _respond(attempt_id: int, kind: str, prompt: str, *, problem: dict, at
     async for event in _stream(model, _messages(prompt), think, out, show=not guard):
         yield event
     text = out[0].strip()
+    if kind == "hint":
+        text = _one_hint(text)
     if guard and (found := await asyncio.to_thread(leak.find, text, problem)):
         log.warning("%s gave the answer away (%s); rewording", kind, found)
         yield {"type": "status", "text": "Rewording so it doesn't give the answer away"}
@@ -681,7 +700,6 @@ async def _respond(attempt_id: int, kind: str, prompt: str, *, problem: dict, at
         text = rewritten
     if guard and working is not None:
         # Hints: no values from steps the student hasn't done yet.
-        text = re.sub(r"^\s*\**hint\s*\d\**\s*[:.]\s*", "", text, flags=re.I)
         if early := leak.ahead(text, problem["statement"], working):
             log.warning("%s jumped ahead of the student (%s); rewording", kind, early)
             yield {"type": "status", "text": "Making sure the hint doesn't do the step for you"}
@@ -695,6 +713,18 @@ async def _respond(attempt_id: int, kind: str, prompt: str, *, problem: dict, at
                 text = rewritten
     db.add_event(attempt_id, kind, text, level=level, meta=meta)
     yield {"type": "done", "text": text, "state": attempt_state(attempt_id)}
+
+
+# Only the current level's rule goes into the prompt: shown all three, the model wrote all three.
+_HINT_RULES = {
+    1: "A nudge: one or two sentences, as a question or an observation that redirects attention "
+       '("What do you notice about ...?"). No formulas, no method names.',
+    2: "The tool: name the technique, theorem or property that unlocks the next part, and say in one "
+       "sentence why it fits. No algebra.",
+    3: "The next step: say what to do next as one instruction. You may write at most one short "
+       "expression, and only one built from things already in the problem or the student's working. "
+       "Do not carry the step out or show its result.",
+}
 
 
 async def hint(attempt_id: int, working: str):
@@ -722,7 +752,7 @@ async def hint(attempt_id: int, working: str):
     previous = [e["content"] for e in db.get_events(attempt_id) if e["kind"] == "hint"]
     prompt = prompts.render(
         "hint",
-        level=str(level),
+        level_rule=_HINT_RULES[level],
         statement=problem["statement"],
         solution=problem["solution"],
         answer=problem["answer"],

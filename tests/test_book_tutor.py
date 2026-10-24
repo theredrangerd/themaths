@@ -107,3 +107,58 @@ def test_self_unverifiable_and_no_secrets():
     p = {"answer_type": "self", "answer": ""}
     assert verify.check("x", p).result == "unverifiable"
     assert leak.secret_values(p) == []
+
+
+@pytest.fixture
+def model_says(book_env, monkeypatch):
+    """Stub the model; set reply[0] to what it says. Records the prompts it was sent."""
+    db.init()
+    reply = ["MODEL REPLY"]
+    calls = []
+
+    async def stub(model, messages, think, out, show=True, **kw):
+        calls.append(messages)
+        out.append(reply[0])
+        return
+        yield
+
+    monkeypatch.setattr(tutor, "_stream", stub)
+    return reply, calls
+
+
+def _model_hint(ref="1.1"):
+    """An attempt whose next hint comes from the model (past the book's 2 hints for 1.1)."""
+    a = open_(ref)
+    run(tutor.hint(a, ""))
+    run(tutor.hint(a, ""))
+    return a
+
+
+@pytest.mark.parametrize("reply", [
+    "What happens when you put $x$ back in?\n\n**Hint 2:** Use substitution.\nHint 3: Add the numbers.",
+    "Hint 1: What happens when you put $x$ back in? Hint 2: Use substitution.",
+    "What happens when you put $x$ back in? Hint 2: Use substitution. Hint 3: Add.",
+])
+def test_model_hint_keeps_only_the_first_hint(model_says, reply):
+    model_says[0][0] = reply
+    a = _model_hint()
+    events = run(tutor.hint(a, "x is 4"))
+    assert events[-1]["text"] == "What happens when you put $x$ back in?"
+
+
+def test_model_hint_without_labels_is_unchanged(model_says):
+    text = "This hint is about the expression: what does it give at $x$? A hint: look again."
+    model_says[0][0] = text
+    a = _model_hint()
+    assert run(tutor.hint(a, "x is 4"))[-1]["text"] == text
+
+
+def test_hint_prompt_shows_only_this_level(model_says):
+    _, calls = model_says
+    a = _model_hint()
+    run(tutor.hint(a, "x is 4"))
+    prompt = calls[-1][-1]["content"]
+    assert "hint 3 of 3" not in prompt.lower()
+    assert "Hint 1, a nudge" not in prompt and "Hint 2, the tool" not in prompt
+    assert "The next step: say what to do next" in prompt
+    assert "Write only this one hint, with no label and no further hints." in prompt
