@@ -114,3 +114,11 @@ def test_missing_chapter_dir_in_listing_404s(client, copy_book):
 
     shutil.rmtree(copy_book / "demo" / "01")
     assert client.get("/api/books").status_code == 404
+
+
+def test_shared_reveal_unlocks_sibling_images(client):
+    a = open_(client, "1.1.5(a)")
+    assert client.post(f"/api/attempts/{a}/solution").status_code == 200
+    b = open_(client, "1.1.5(b)")
+    assert client.get(f"{CH}/img/sol.png", params={"attempt": b}).status_code == 200
+    assert client.post(f"/api/attempts/{b}/self", json={"got_it": False}).status_code == 200

@@ -181,3 +181,34 @@ def test_values_the_student_wrote_are_not_leaks_in_replies(model_says):
     assert run(tutor.explain(a, "x = -5/2 works", ""))[-1]["text"] == reply[0]
     assert run(tutor.analyse(a, "", "-5/2, 1, 2"))[-1]["text"] == reply[0]
     assert len(calls) == 3  # no rewrites
+
+
+def test_shared_reveal_leaves_self_sibling_open(no_model):
+    a = open_("1.1.5(a)")
+    run(tutor.solution(a))
+    b = open_("1.1.5(b)")
+    state = tutor.attempt_state(b)
+    assert state["attempt"]["finished_at"] is None and state["attempt"]["outcome"] is None
+    assert state["attempt"]["solution_viewed"] == 1 and state["attempt"]["hint_level"] == 4
+    sol = [e for e in state["events"] if e["kind"] == "solution"]
+    assert len(sol) == 1 and f"/api/books/demo/01/img/sol.png?attempt={b}" in sol[0]["content"]
+    assert tutor.self_mark(b, True)["attempt"]["outcome"] == "correct"
+
+
+def test_shared_reveal_keeps_solved_sibling_unaided(no_model):
+    b = open_("1.1.1(b)")
+    assert tutor.check_answer(b, "14", "")["result"] == "correct"
+    run(tutor.solution(open_("1.1.1(a)")))
+    assert db.book_statuses("demo/01/")["demo/01/1.1.1(b)"] == "unaided"
+    state = tutor.attempt_state(b)
+    assert state["attempt"]["solution_viewed"] == 0
+    assert not [e for e in state["events"] if e["kind"] == "solution"]
+
+
+def test_shared_reveal_from_self_part_gives_up_open_sibling(no_model):
+    run(tutor.solution(open_("1.1.5(b)")))
+    a = open_("1.1.5(a)")
+    state = tutor.attempt_state(a)
+    assert state["attempt"]["outcome"] == "gave_up" and state["attempt"]["finished_at"]
+    assert [e["kind"] for e in state["events"]] == ["solution"]
+    assert db.book_statuses("demo/01/")["demo/01/1.1.5(a)"] == "seen"

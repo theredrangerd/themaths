@@ -626,16 +626,29 @@ def self_mark(attempt_id: int, got_it: bool) -> dict:
     return attempt_state(attempt_id)
 
 
+def _book_solution(attempt_id: int, problem: dict) -> str:
+    """A book problem's solution, with its images unlocked for this attempt."""
+    return _IMG.sub(rf"\1?attempt={attempt_id}", problem["solution"])
+
+
 def _mark_siblings_seen(book_ref: str) -> None:
-    """A solution shared with other parts shows them too: count those as seen, and give up if open."""
+    """A solution shared with other parts shows them too: record it as seen on each.
+
+    A part already solved, or already shown the solution, is left alone. A self-marked
+    part stays open so the student can still say how they did; any other open part is
+    given up, as if its own solution had been shown.
+    """
     for sib in books.siblings(book_ref):
         book, chapter, ref = sib.split("/", 2)
         attempt_id = _latest_or_new(_ensure_book_problem(book, chapter, ref))
-        attempt, _ = _load(attempt_id)
-        fields = {"solution_viewed": 1}
-        if attempt["outcome"] in (None, "incorrect"):
+        attempt, problem = _load(attempt_id)
+        if attempt["outcome"] == "correct" or attempt["solution_viewed"]:
+            continue
+        fields = {"solution_viewed": 1, "hint_level": 4}
+        if problem["answer_type"] != "self" and attempt["outcome"] in (None, "incorrect"):
             fields.update(_finish(attempt, "gave_up"))
         db.update_attempt(attempt_id, **fields)
+        db.add_event(attempt_id, "solution", _book_solution(attempt_id, problem), level=4)
 
 
 def check_answer(attempt_id: int, answer: str, working: str) -> dict:
@@ -772,7 +785,7 @@ async def solution(attempt_id: int):
     fields = {"hint_level": 4, "solution_viewed": 1}
     text = problem["solution"]
     if problem["source"] == "book":
-        text = _IMG.sub(rf"\1?attempt={attempt_id}", text)
+        text = _book_solution(attempt_id, problem)
         if problem["answer_type"] != "self":
             # A self-marked problem stays open until the student says how they did.
             if attempt["outcome"] in (None, "incorrect"):
